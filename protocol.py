@@ -37,7 +37,7 @@ class Protocol:
         return cls.from_dict(data_dict)
 
     def to_str(self):
-        return json.dumps(self.to_dict())
+        return json.dumps(self.to_dict()) + "\n"
 
 # Example usage
 if __name__ == "__main__":
@@ -49,7 +49,6 @@ if __name__ == "__main__":
 
     new_protocol = Protocol.from_str(protocol_dict)
     print(new_protocol.sender["1"])
-
 
     # Create a socket object
     

@@ -12,12 +12,16 @@ import tkinter as tk
 from tkinter import ttk  # Import the ttk module
 from tkinter import scrolledtext, messagebox, simpledialog
 import re
-
+import pyautogui
+import io
+from PIL import Image, ImageTk
+import base64
 # Server configuration
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 12345
+BUFFER_SIZE = 1000000  # 1 MBs
 
-# Logging configuration
+# Logging configurationa
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -97,11 +101,146 @@ class LobbyWindow:
         self.chat_menu.add_command(label="Enter Chat", command=self.enter_chat)
         self.chat_menu.add_command(label="Exit Chat", command=self.exit_chat)
 
+        
+        # Tab 3: Share Screen
+        self.screen_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.screen_tab, text="Share Screen")
+
+        # Canvas to display the shared screen
+        self.screen_canvas = tk.Canvas(self.screen_tab, bg="black")
+        self.screen_canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Add a new menu for screen sharing
+        self.screen_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Screen Share", menu=self.screen_menu)
+        self.screen_menu.add_command(label="Start Screen Share", command=self.start_screen_share)
+        self.screen_menu.add_command(label="Stop Screen Share", command=self.stop_screen_share)
+
+        # Flag to track screen sharing state
+        self.is_sharing_screen = False
+
+
+        # Flashing red label for screen sharing status
+        self.sharing_label = tk.Label(self.lobby_tab, text="Sharing Screen", fg="red")
+        self.sharing_label.pack(pady=10)
+        self.sharing_label.pack_forget()  # Hide initially
         # Update menu states initially
         self.update_menu_states()
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def start_screen_share(self):
+        """Start screen sharing."""
+        if not connected_room_code:
+            messagebox.showinfo("Info", "You must be in a room to share your screen.")
+            return
+        if self.is_sharing_screen:
+            messagebox.showinfo("Info", "Screen sharing is already active.")
+            return
+
+        self.is_sharing_screen = True
+        self.client.send(Protocol("START_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
+        threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
+
+        # Show the flashing red label
+        self.sharing_label.pack(pady=10)
+        self.flash_sharing_label()
+
+    def stop_screen_share(self):
+        """Stop screen sharing."""
+        if not self.is_sharing_screen:
+            messagebox.showinfo("Info", "Screen sharing is not active.")
+            return
+
+        self.is_sharing_screen = False
+        self.client.send(Protocol("STOP_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
+
+        self.sharing_label.pack_forget()  # Hide the flashing red label
+
+    def flash_sharing_label(self):
+        """Flash the sharing label red."""
+        if self.is_sharing_screen:
+            current_color = self.sharing_label.cget("fg")
+            new_color = "red" if current_color == "white" else "white"
+            self.sharing_label.config(fg=new_color)
+            self.root.after(500, self.flash_sharing_label)  # Flash every 500ms
+
+
+    def capture_and_send_screen(self):
+        """Capture the screen and send it to the server."""
+        while self.is_sharing_screen:
+            print("Sharing screen")
+            try:
+                # Capture the screen
+                screenshot = pyautogui.screenshot()
+
+                # Resize the screenshot
+                try:
+                    # For Pillow >= 10.0.0
+                    resampling_filter = Image.Resampling.LANCZOS
+                except AttributeError:
+                    # For Pillow < 10.0.0
+                    resampling_filter = Image.ANTIALIAS
+
+                screenshot = screenshot.resize((800, 600), resampling_filter)  # Resize to 800x600
+
+                # Convert the screenshot to bytes
+                img_byte_arr = io.BytesIO()
+                screenshot.save(img_byte_arr, format='JPEG', quality=50)  # Lower quality
+                img_byte_arr = img_byte_arr.getvalue()
+
+                # Encode the image data as Base64
+                img_base64 = base64.b64encode(img_byte_arr).decode('utf-8')
+
+                # Send the screen data to the server
+                self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
+
+                # Add a small delay to avoid overloading the network
+                threading.Event().wait(0.5)  # Wait for 0.5 seconds
+            except Exception as e:
+                logging.error(f"Error capturing or sending screen: {e}")
+                break
+
+    def handle_message(self, message, lobby_window, chat_window, chat_root):
+        # ... (existing code)
+
+        # Handle screen data from other users
+        if message.command == "SCREEN_DATA":
+            self.display_screen(message.data["image_data"])
+
+    def display_screen(self, image_data):
+        """Display the received screen data in the Share Screen tab."""
+        try:
+            # Check if image_data is a Base64-encoded string
+            if isinstance(image_data, str):
+                # Decode the Base64 string to bytes
+                image_bytes = base64.b64decode(image_data)
+            else:
+                # Assume image_data is already bytes
+                image_bytes = image_data
+
+            # Convert the image data to a PIL image
+            image = Image.open(io.BytesIO(image_bytes))
+
+            # Resize the image to fit the canvas
+            canvas_width = self.screen_canvas.winfo_width()
+            canvas_height = self.screen_canvas.winfo_height()
+
+            if canvas_width > 0 and canvas_height > 0:
+                # Use Resampling.LANCZOS instead of ANTIALIAS
+                image = image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+            else:
+                logging.warning("Canvas dimensions are invalid. Using original image size.")
+
+            # Display the image on the canvas
+            photo = ImageTk.PhotoImage(image)
+            self.screen_canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+            self.screen_canvas.image = photo  # Keep a reference to avoid garbage collection
+        except Exception as e:
+            logging.error(f"Error displaying screen: {e}")
+            raise e
+
 
     def update_menu_states(self):
         """Update the enabled/disabled state of menu options based on the current state."""
@@ -253,7 +392,13 @@ def listen_for_messages(client):
     """Listen for incoming messages from the server and add them to the queue."""
     while True:
         try:
-            message = Protocol.from_str(client.recv(1024).decode('utf-8'))
+            data = b""
+            while True:
+                part = client.recv(BUFFER_SIZE)
+                data += part
+                if len(part) < BUFFER_SIZE:
+                    break
+            message = Protocol.from_str(data.decode('utf-8'))
             message_queue.put(message)
         except Exception as e:
             logging.error(f"Error receiving message: {e}")
@@ -322,6 +467,7 @@ def main():
             root.after(100, process_messages)  # Check for new messages every 100ms
 
         def handle_message(message, lobby_window, chat_window, chat_root):
+            print(message)
             global connected_room_code, connected_room_password, IN_CHAT
             if message.command == "CHAT_MESSAGE":
                 chat_window.display_message(f"{message.sender}: {message.data['message']}")
@@ -363,6 +509,7 @@ def main():
             elif message.command == "NEW_HOST":
                 lobby_window.display_message(f"{message.data['username']} is the new host.")
             elif message.command == "ERROR":
+                messagebox.showinfo("Error", message.data["message"])
                 lobby_window.display_message(f"Error: {message.data['message']}")
             elif message.command == "INCORRECT_PASSWORD":
                 lobby_window.display_message("Incorrect password.")    
@@ -383,8 +530,10 @@ def main():
                 lobby_window.display_message(f"Room Status: {status}")
                 lobby_window.display_message(f"Host: {host}")
                 lobby_window.display_message(f"Members: {members}")
+            elif message.command == "SCREEN_DATA":  # Handle screen sharing data
+                lobby_window.display_screen(message.data["image_data"])
 
-        root.after(100, process_messages)  # Start processing messages
+        root.after(1, process_messages)  # Start processing messages
         root.mainloop()
 
 if __name__ == "__main__":
