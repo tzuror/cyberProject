@@ -110,6 +110,9 @@ class LobbyWindow:
         self.screen_canvas = tk.Canvas(self.screen_tab, bg="black")
         self.screen_canvas.pack(fill=tk.BOTH, expand=True)
 
+        self.screen_canvas.bind("<Configure>", self.on_canvas_resize)
+        self.last_screen_image = None
+
         # Add a new menu for screen sharing
         self.screen_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.menu_bar.add_cascade(label="Screen Share", menu=self.screen_menu)
@@ -124,11 +127,18 @@ class LobbyWindow:
         self.sharing_label = tk.Label(self.lobby_tab, text="Sharing Screen", fg="red")
         self.sharing_label.pack(pady=10)
         self.sharing_label.pack_forget()  # Hide initially
+
         # Update menu states initially
         self.update_menu_states()
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def on_canvas_resize(self, event):
+        """Handle canvas resizing."""
+        if self.last_screen_image:
+            # Redisplay the last image with the new canvas size
+            self.display_screen(self.last_screen_image)
 
     def start_screen_share(self):
         """Start screen sharing."""
@@ -208,10 +218,13 @@ class LobbyWindow:
         # Handle screen data from other users
         if message.command == "SCREEN_DATA":
             self.display_screen(message.data["image_data"])
-
+    
     def display_screen(self, image_data):
         """Display the received screen data in the Share Screen tab."""
         try:
+            # Store the last image for potential resizing
+            self.last_screen_image = image_data
+
             # Check if image_data is a Base64-encoded string
             if isinstance(image_data, str):
                 # Decode the Base64 string to bytes
@@ -223,23 +236,44 @@ class LobbyWindow:
             # Convert the image data to a PIL image
             image = Image.open(io.BytesIO(image_bytes))
 
-            # Resize the image to fit the canvas
+            # Get the current canvas dimensions
             canvas_width = self.screen_canvas.winfo_width()
             canvas_height = self.screen_canvas.winfo_height()
 
-            if canvas_width > 0 and canvas_height > 0:
-                # Use Resampling.LANCZOS instead of ANTIALIAS
-                image = image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
-            else:
-                logging.warning("Canvas dimensions are invalid. Using original image size.")
+            # Clear previous content
+            self.screen_canvas.delete("all")
 
-            # Display the image on the canvas
-            photo = ImageTk.PhotoImage(image)
-            self.screen_canvas.create_image(0, 0, anchor=tk.NW, image=photo)
-            self.screen_canvas.image = photo  # Keep a reference to avoid garbage collection
+            # If canvas dimensions are valid
+            if canvas_width > 0 and canvas_height > 0:
+                # Calculate the aspect ratio of the image and the canvas
+                image_ratio = image.width / image.height
+                canvas_ratio = canvas_width / canvas_height
+
+                # Resize the image to fit the canvas while maintaining aspect ratio
+                if canvas_ratio > image_ratio:
+                    # Canvas is wider than the image
+                    new_height = canvas_height
+                    new_width = int(image_ratio * new_height)
+                else:
+                    # Canvas is taller than the image
+                    new_width = canvas_width
+                    new_height = int(new_width / image_ratio)
+
+                # Resize the image
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                # Create PhotoImage
+                photo = ImageTk.PhotoImage(image)
+
+                # Calculate position to center the image
+                x = (canvas_width - new_width) // 2
+                y = (canvas_height - new_height) // 2
+
+                # Display the centered image
+                self.screen_canvas.create_image(x, y, anchor=tk.NW, image=photo)
+                self.screen_canvas.image = photo  # Keep a reference to avoid garbage collection
         except Exception as e:
             logging.error(f"Error displaying screen: {e}")
-            raise e
 
 
     def update_menu_states(self):
