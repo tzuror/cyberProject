@@ -409,16 +409,15 @@ def send_message(client, message):
         client.send(Protocol("SEND_CHAT_MESSAGE", username, {"message": message}).to_str().encode('utf-8'))
     else:
         messagebox.showinfo("Info", "You are not in a room.")
-
-def main():
+def get_user_info(root):
     global USER_NAME, EMAIL, username
-    root = tk.Tk()
     while True:
         USER_NAME = simpledialog.askstring("Username", "Enter your username:", parent=root)
         val = True
         if not USER_NAME:
             messagebox.showerror("Error", "Username is required.")
             val = False
+            continue
         if len(USER_NAME) > 20:
             messagebox.showerror("Error", "Username is too long.")
         if len(USER_NAME) < 2:
@@ -431,6 +430,7 @@ def main():
         if not EMAIL:
             messagebox.showerror("Error", "Email is required.")
             val = False
+            continue
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_regex, EMAIL):
             messagebox.showerror("Error", "Invalid email format.")
@@ -442,7 +442,13 @@ def main():
         if val:
             break
     username = {"username": USER_NAME, "email": EMAIL}
-    print(username)
+    return username
+
+def main():
+    global USER_NAME, EMAIL, username
+    root = tk.Tk()
+    
+    username = get_user_info(root)
     client = connect_to_server()
     if client:
         # Create the lobby window
@@ -467,7 +473,6 @@ def main():
             root.after(100, process_messages)  # Check for new messages every 100ms
 
         def handle_message(message, lobby_window, chat_window, chat_root):
-            print(message)
             global connected_room_code, connected_room_password, IN_CHAT
             if message.command == "CHAT_MESSAGE":
                 chat_window.display_message(f"{message.sender}: {message.data['message']}")

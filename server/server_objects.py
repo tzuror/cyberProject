@@ -48,6 +48,7 @@ class ROOM:
         self.__host = host
         self.__status = status
         self.__pwd = room_pwd
+        self.sharing = None
 
     def add_member(self, member: MEMBER):
         self.MEMBERS.add(member)
@@ -84,6 +85,12 @@ class ROOM:
 
     def remove_chat_member(self, member: MEMBER):
         self.CHAT_MEMBERS.remove(member)
+    
+    def get_sharing(self):
+        return self.sharing
+    
+    def set_sharing(self, sharing):
+        self.sharing = sharing
 
     def get_chat_members(self):
         return self.CHAT_MEMBERS

@@ -264,34 +264,34 @@ def handle_client(client_socket, client_address):
                 logging.error(f"Invalid command: {command}")
         except Exception as e:
             logging.error(f"Error handling client: {e}")
-            raise (e)
             break
 
-
-    room_code = client.get_room_code()
-    if client in clients:
-        if room_code in rooms.keys() and room_code != None:
-            print("3")
-            if rooms[room_code].get_host() == client:
-                print("4")
-                rooms[room_code].set_host(None)
-                rooms[room_code].remove_member(client)
-                broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
-            elif client in rooms[room_code].get_members():
-                print("5")
-                rooms[room_code].remove_member(client)
-                broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
-            if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
-                print("room deleted")
-                del rooms[room_code]
-                rooms.pop(room_code, None)
-            elif rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) > 0:
-                new_host = list(rooms[room_code].get_members())[0]
-                rooms[room_code].set_host(new_host)
-                broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}).to_str().encode('utf-8'))
-        clients.remove(client)
-        del client
-    logging.info(f"Client {client_address} disconnected")
+    try:        
+        room_code = client.get_room_code()
+        if client in clients:
+            if room_code in rooms.keys() and room_code != None:
+                if rooms[room_code].get_host() == client:
+                    rooms[room_code].set_host(None)
+                    rooms[room_code].remove_member(client)
+                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
+                elif client in rooms[room_code].get_members():
+                    rooms[room_code].remove_member(client)
+                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
+                if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
+                    print("room deleted")
+                    del rooms[room_code]
+                    rooms.pop(room_code, None)
+                elif rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) > 0:
+                    new_host = list(rooms[room_code].get_members())[0]
+                    rooms[room_code].set_host(new_host)
+                    broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}).to_str().encode('utf-8'))
+            clients.remove(client)
+            del client
+        logging.info(f"Client {client_address} disconnected")
+    except Exception as e:
+        logging.error(f"Error handling client disconnection: {e}")
+    finally:
+        client_socket.close()
         
 
 
