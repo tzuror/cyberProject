@@ -141,7 +141,7 @@ class LobbyWindow:
             self.display_screen(self.last_screen_image)
 
     def start_screen_share(self):
-        """Start screen sharing."""
+        """Request to start screen sharing."""
         if not connected_room_code:
             messagebox.showinfo("Info", "You must be in a room to share your screen.")
             return
@@ -149,13 +149,18 @@ class LobbyWindow:
             messagebox.showinfo("Info", "Screen sharing is already active.")
             return
 
-        self.is_sharing_screen = True
+        # Send the request to start screen sharing
         self.client.send(Protocol("START_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
-        threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
 
         # Show the flashing red label
         self.sharing_label.pack(pady=10)
         self.flash_sharing_label()
+
+    def start_screen_share_after_approval(self):
+        """Start screen sharing after receiving approval from the server."""
+        if not self.is_sharing_screen:
+            self.is_sharing_screen = True
+            threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
 
     def stop_screen_share(self):
         """Stop screen sharing."""
@@ -207,7 +212,7 @@ class LobbyWindow:
                 self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
 
                 # Add a small delay to avoid overloading the network
-                threading.Event().wait(0.5)  # Wait for 0.5 seconds
+                threading.Event().wait(0.03)  # Wait for 0.5 seconds
             except Exception as e:
                 logging.error(f"Error capturing or sending screen: {e}")
                 break
@@ -462,7 +467,7 @@ def get_user_info(root):
         EMAIL = simpledialog.askstring("Email", "Enter your email:", parent=root)
         val = True
         if not EMAIL:
-            messagebox.showerror("Error", "Email is required.")
+            messagebox.showerror("Error", "Email is required.") 
             val = False
             continue
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -571,6 +576,12 @@ def main():
                 lobby_window.display_message(f"Members: {members}")
             elif message.command == "SCREEN_DATA":  # Handle screen sharing data
                 lobby_window.display_screen(message.data["image_data"])
+            elif message.command == "SCREEN_SHARE_APPROVED":
+                lobby_window.start_screen_share_after_approval()
+            else:
+                logging.error(f"Unknown message: {message}")
+                lobby_window.display_message(f"Unknown message: {message}")
+
 
         root.after(1, process_messages)  # Start processing messages
         root.mainloop()
