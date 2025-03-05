@@ -114,7 +114,6 @@ def handle_client(client_socket, client_address):
                 client.set_email(message.sender["email"])
                 if room_code in rooms.keys() and rooms[room_code].get_status() == "open" and rooms[room_code].get_code() == str(room_code) and rooms[room_code].get_host() != None:
                     if room_pwd == rooms[room_code].get_pwd():
-                        print("room found")
                         rooms[str(room_code)].add_member(client)
                         client.set_room_code(room_code)
                         clients.add(client)
@@ -165,25 +164,23 @@ def handle_client(client_socket, client_address):
             elif command == "LEAVE_ROOM":
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
-                    print(12)
+                    if rooms[room_code].get_sharing() != None and rooms[room_code].get_sharing() == client:
+                        rooms[room_code].set_sharing(None)
+                        broadcast_message(room_code, Protocol("USER_STOPPED_SCREEN_SHARE", "server", {"username": message.sender}).to_str().encode('utf-8'))
                     if rooms[room_code].get_host().get_socket() == client_socket:
-                        print(22)
                         rooms[room_code].set_host(None)
                         rooms[room_code].remove_member(client)
                         client.set_room_code(None)
                         broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
                         if len(rooms[room_code].get_members()) > 0:
-                            print(32)
                             new_host = list(rooms[room_code].get_members())[0]
                             rooms[room_code].set_host(new_host)
                             broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}))
                     elif client in rooms[room_code].get_members():
-                        print(42)
                         rooms[room_code].remove_member(client)
                         client.set_room_code(None)
                         broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
                     if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
-                        print(52)
                         del rooms[room_code]
                         rooms.pop(room_code, None)
                     send(client_socket, Protocol("LEFT_ROOM", "server", {}).to_str().encode('utf-8'))
@@ -204,7 +201,6 @@ def handle_client(client_socket, client_address):
             elif command == "CLOSE_ROOM":
                 room_code = client.get_room_code()
                 if room_code in rooms.keys() and rooms[room_code].get_host() == client:
-                    
                     broadcast_message(room_code, Protocol("ROOM_CLOSED", "server", {}))
                     rooms[room_code].set_status("closed")
                     for member in rooms[room_code].get_members():
@@ -218,8 +214,14 @@ def handle_client(client_socket, client_address):
                 if room_code in rooms.keys():
                     if(rooms[room_code].get_sharing() == None):
                         rooms[room_code].set_sharing(client)
-                        broadcast_message(room_code, Protocol("USER_STARTED_SCREEN_SHARE", "server", {"username": message.sender["username"]}))
-                        logging.info(f"{message.sender['username']} started screen sharing in room {room_code}")
+                        share_sound = message.data.get("share_sound", False)
+                        send(client_socket, Protocol("SCREEN_SHARE_APPROVED", "server", {"share_sound": share_sound}).to_str().encode('utf-8'))
+                        send(client_socket, Protocol("SCREEN_SHARE_APPROVED", "server", {}).to_str().encode('utf-8'))
+                        broadcast_message( room_code, Protocol("USER_STARTED_SCREEN_SHARE", "server", {
+                            "username": message.sender["username"],
+                            "share_sound": share_sound
+                        }))
+                        logging.info(f"{message.sender['username']} started screen sharing in room {room_code} (Sound: {share_sound})")
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "Screen sharing is already in progress."}).to_str().encode('utf-8'))
                         logging.error(f"{message.sender['username']} tried to start screen sharing in room {room_code} but screen sharing is already in progress.")
@@ -231,27 +233,37 @@ def handle_client(client_socket, client_address):
                 if room_code in rooms.keys():
                     if rooms[room_code].get_sharing() == client:
                         rooms[room_code].set_sharing(None)
+                        send(client_socket, Protocol("SCREEN_SHARE_STOPPED", "server", {}).to_str().encode('utf-8'))
                         broadcast_message(room_code, Protocol("USER_STOPPED_SCREEN_SHARE", "server", {"username": message.sender["username"]}))
                         logging.info(f"{message.sender['username']} stopped screen sharing in room {room_code}")
+                    elif rooms[room_code].get_host() == client and rooms[room_code].get_sharing() != None and rooms[room_code].get_sharing() != client:
+                        shared_client = rooms[room_code].get_sharing()
+                        if shared_client:
+                            shared_client.send(Protocol("SCREEN_SHARE_STOPPED", "server", {"message" : "HOST stopped your share screen"}).to_str().encode('utf-8'))
+                            rooms[room_code].set_sharing(None)
+                            broadcast_message(room_code, Protocol("USER_STOPPED_SCREEN_SHARE", "server", {"username": message.sender["username"], "message" : f"HOST stopped {shared_client.get_name()} share screen"}))
+                            logging.info(f"{message.sender['username']} - host stopped screen sharing in room {room_code}")
+                        else:
+                            send(client_socket, Protocol("ERROR", "server", {"message": "No one is sharing their screen."}).to_str().encode('utf-8'))
+                            logging.error(f"{message.sender['username']} tried to stop screen sharing in room {room_code} but no one is sharing their screen.")
                     else:
-                        send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
+                        send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen, only admin can close other share screens."}).to_str().encode('utf-8'))
                         logging.error(f"{message.sender['username']} tried to stop screen sharing in room {room_code} but they are not sharing their screen.")
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
                     logging.error(f"{message.sender['username']} tried to stop screen sharing in room {room_code} but the room was not found.")
             elif command == "SCREEN_DATA":
-                print("1")
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
-                    print("2")
                     if rooms[room_code].get_sharing() == client:
-                        print("3")
 
                     # Broadcast the screen data to all clients in the room
                         for member in rooms[room_code].get_members():
-                            print("4")
                             with lock:
-                                member.send(Protocol("SCREEN_DATA", message.sender["username"], {"image_data": message.data["image_data"]}).to_str().encode('utf-8'))
+                                member.send(Protocol("SCREEN_DATA", message.sender["username"], {
+                                    "image_data": message.data["image_data"],
+                                    "sound_data": message.data.get("sound_data")
+                                }).to_str().encode('utf-8'))
                                 traffic_logger.info(f"SENT to {member.get_address()}: SCREEN_DATA")
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
@@ -259,12 +271,27 @@ def handle_client(client_socket, client_address):
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
                     logging.error(f"{message.sender['username']} tried to send screen data in room {room_code} but the room was not found.")
+            elif command == "SOUND_DATA":
+                room_code = client.get_room_code()
+                if room_code in rooms.keys():
+                    if rooms[room_code].get_sharing() == client:
+                        for member in rooms[room_code].get_members():
+                            with lock:
+                                member.send(Protocol("SOUND_DATA", message.sender["username"], message.data).to_str().encode('utf-8'))
+                                traffic_logger.info(f"SENT to {member.get_address()}: SHARE_SOUND")
+                    else:
+                        send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
+                        logging.error(f"{message.sender['username']} tried to share sound in room {room_code} but they are not sharing their screen.")
+                else:
+                    send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
+                    logging.error(f"{message.sender['username']} tried to share sound in room {room_code} but the room was not found.")
             else:
                 send(client_socket, Protocol("ERROR", "server", {"message": "Invalid command."}).to_str().encode('utf-8'))
                 logging.error(f"Invalid command: {command}")
+            
         except Exception as e:
             logging.error(f"Error handling client: {e}")
-            break
+
 
     try:        
         room_code = client.get_room_code()

@@ -122,6 +122,10 @@ class LobbyWindow:
         # Flag to track screen sharing state
         self.is_sharing_screen = False
 
+        self.sound_share_var = tk.BooleanVar()
+        self.sound_share_checkbox = tk.Checkbutton(self.screen_menu, text="Share Sound", variable=self.sound_share_var)
+        self.screen_menu.add_checkbutton(label="Share Sound", variable=self.sound_share_var)
+
 
         # Flashing red label for screen sharing status
         self.sharing_label = tk.Label(self.lobby_tab, text="Sharing Screen", fg="red")
@@ -141,7 +145,7 @@ class LobbyWindow:
             self.display_screen(self.last_screen_image)
 
     def start_screen_share(self):
-        """Request to start screen sharing."""
+        """Start screen sharing."""
         if not connected_room_code:
             messagebox.showinfo("Info", "You must be in a room to share your screen.")
             return
@@ -149,29 +153,27 @@ class LobbyWindow:
             messagebox.showinfo("Info", "Screen sharing is already active.")
             return
 
-        # Send the request to start screen sharing
-        self.client.send(Protocol("START_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
+        share_sound = self.sound_share_var.get()
+
+        self.client.send(Protocol("START_SCREEN_SHARE", username, {"share_sound": share_sound}).to_str().encode('utf-8'))
+        #self.is_sharing_screen = True
+        #self.client.send(Protocol("START_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
+        #threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
 
         # Show the flashing red label
         self.sharing_label.pack(pady=10)
         self.flash_sharing_label()
 
-    def start_screen_share_after_approval(self):
-        """Start screen sharing after receiving approval from the server."""
-        if not self.is_sharing_screen:
-            self.is_sharing_screen = True
-            threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
-
     def stop_screen_share(self):
         """Stop screen sharing."""
-        if not self.is_sharing_screen:
+        """if not self.is_sharing_screen:
             messagebox.showinfo("Info", "Screen sharing is not active.")
             return
 
-        self.is_sharing_screen = False
+        self.is_sharing_screen = False"""
         self.client.send(Protocol("STOP_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
 
-        self.sharing_label.pack_forget()  # Hide the flashing red label
+        #self.sharing_label.pack_forget()  # Hide the flashing red label
 
     def flash_sharing_label(self):
         """Flash the sharing label red."""
@@ -180,6 +182,29 @@ class LobbyWindow:
             new_color = "red" if current_color == "white" else "white"
             self.sharing_label.config(fg=new_color)
             self.root.after(500, self.flash_sharing_label)  # Flash every 500ms
+    
+    def start_screen_share_after_approval(self):
+        """Start screen sharing after receiving approval from the server."""
+        if not self.is_sharing_screen:
+            self.is_sharing_screen = True
+            threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
+            threading.Thread(target=self.capture_and_send_sound, daemon=True).start()
+
+    def capture_and_send_sound(self):
+        """Capture sound data."""
+        while self.is_sharing_screen:
+            if self.sound_share_var.get():
+                # Implement sound capture logic here
+                # This could involve using a library like pyaudio to capture audio from the microphone
+                # Return the captured sound data as bytes or Base64-encoded string
+                sound_data = "Sound data"
+                self.client.sendall(Protocol("SOUND_DATA", username, {"sound_data": sound_data}).to_str().encode('utf-8'))
+            threading.Event().wait(0.05)
+
+        # Implement sound capture logic here
+        # This could involve using a library like pyaudio to capture audio from the microphone
+        # Return the captured sound data as bytes or Base64-encoded string
+        
 
 
     def capture_and_send_screen(self):
@@ -208,11 +233,18 @@ class LobbyWindow:
                 # Encode the image data as Base64
                 img_base64 = base64.b64encode(img_byte_arr).decode('utf-8')
 
+                # Capture sound if sound sharing is enabled
+                
+                # Send the screen data (and sound data if applicable) to the server
+                self.client.sendall(Protocol("SCREEN_DATA", username, {
+                    "image_data": img_base64,
+                }).to_str().encode('utf-8'))
+
                 # Send the screen data to the server
-                self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
+                #self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
 
                 # Add a small delay to avoid overloading the network
-                threading.Event().wait(0.03)  # Wait for 0.5 seconds
+                threading.Event().wait(0.05)  # Wait for 0.5 seconds
             except Exception as e:
                 logging.error(f"Error capturing or sending screen: {e}")
                 break
@@ -279,6 +311,15 @@ class LobbyWindow:
                 self.screen_canvas.image = photo  # Keep a reference to avoid garbage collection
         except Exception as e:
             logging.error(f"Error displaying screen: {e}")
+    
+    
+    def play_sound(self, sound_data):
+        """Play the received sound data."""
+        # Implement sound playback logic here
+        # This could involve using a library like pyaudio to play the sound
+        print("Playing sound data")
+        pass
+    
 
 
     def update_menu_states(self):
@@ -332,6 +373,8 @@ class LobbyWindow:
                 self.client.send(Protocol("JOIN_ROOM", username, {"room_code": room_code, "room_pwd": room_pwd}).to_str().encode('utf-8'))
 
     def leave_room(self):
+        if self.is_sharing_screen:
+            self.stop_screen_share()
         if not connected_room_code:
             messagebox.showinfo("Info", "You are not in a room.")
             return
@@ -473,7 +516,6 @@ def get_user_info(root):
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_regex, EMAIL):
             messagebox.showerror("Error", "Invalid email format.")
-            
         elif len(EMAIL) > 50:
             messagebox.showerror("Error", "Email is too long.")
         elif len(EMAIL) < 5:
@@ -515,6 +557,35 @@ def main():
             global connected_room_code, connected_room_password, IN_CHAT
             if message.command == "CHAT_MESSAGE":
                 chat_window.display_message(f"{message.sender}: {message.data['message']}")
+            elif message.command == "SCREEN_DATA":  # Handle screen sharing data
+                try:
+                    lobby_window.display_screen(message.data["image_data"])
+                    
+                except Exception as e:
+                    logging.error(f"Error displaying screen data: {e}")
+            elif message.command == "SOUND_DATA":
+                lobby_window.play_sound(message.data["sound_data"])
+            elif message.command == "SCREEN_SHARE_APPROVED":
+                lobby_window.display_message("Screen sharing approved.")
+                lobby_window.start_screen_share_after_approval()
+            elif message.command == "SCREEN_SHARE_STOPPED":
+                message = "Screen sharing stopped."
+                try:
+                    print(message)
+                    print(message.data)
+                    lobby_window.display_message(message.data['message'])
+                    messagebox.showinfo("Info", message.data["message"])
+                    message += "\n" + message.data["message"]
+                except Exception as e:
+                    print(e)
+                    pass
+                lobby_window.display_message(message)
+                with lock:
+                    lobby_window.is_sharing_screen = False
+            elif message.command == "USER_STOPPED_SCREEN_SHARE":
+                lobby_window.display_message(f"{message.data['username']} stopped screen sharing.")
+                if "message" in message.data:
+                    lobby_window.display_message(message.data["message"])
             elif message.command == "USER_JOINED":
                 lobby_window.display_message(f"{message.data['username']} joined the room.")
             elif message.command == "ROOM_CREATED":
@@ -574,15 +645,7 @@ def main():
                 lobby_window.display_message(f"Room Status: {status}")
                 lobby_window.display_message(f"Host: {host}")
                 lobby_window.display_message(f"Members: {members}")
-            elif message.command == "SCREEN_DATA":  # Handle screen sharing data
-                lobby_window.display_screen(message.data["image_data"])
-            elif message.command == "SCREEN_SHARE_APPROVED":
-                lobby_window.start_screen_share_after_approval()
-            else:
-                logging.error(f"Unknown message: {message}")
-                lobby_window.display_message(f"Unknown message: {message}")
-
-
+            
         root.after(1, process_messages)  # Start processing messages
         root.mainloop()
 
