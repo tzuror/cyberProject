@@ -20,6 +20,7 @@ import base64
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 12345
 BUFFER_SIZE = 1000000  # 1 MBs
+PACKET_SIZE = 1024  # 1 KB
 
 # Logging configurationa
 logging.basicConfig(
@@ -29,9 +30,15 @@ logging.basicConfig(
     filemode='a'  # Append mode
 )
 
+client_udp_msg = logging.getLogger('client_udp_msg')
+client_udp_msg.setLevel(logging.INFO)
+client_udp_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\client_udp_msg.log')
+client_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+client_udp_msg.addHandler(client_udp_handler)
+
 connected_room_code = None
 connected_room_password = None
-username = None
+userinfo = None
 
 lock = threading.Lock()
 message_queue = queue.Queue()  # Thread-safe queue for incoming messages
@@ -41,12 +48,15 @@ IN_CHAT = False
 USER_NAME = None
 EMAIL = None
 
-username = {"username": USER_NAME, "email": EMAIL}
+userinfo = {"username": USER_NAME, "email": EMAIL}
 
 class LobbyWindow:
-    def __init__(self, root, client):
+    def __init__(self, root, userinfo, client, client_udp, server_udp_addr):
         self.root = root
         self.client = client
+        self.userinfo = userinfo
+        self.client_udp = client_udp
+        self.server_udp_addr = server_udp_addr
         self.root.title("Lobby")
         self.root.geometry("500x400")
 
@@ -155,7 +165,7 @@ class LobbyWindow:
 
         share_sound = self.sound_share_var.get()
 
-        self.client.send(Protocol("START_SCREEN_SHARE", username, {"share_sound": share_sound}).to_str().encode('utf-8'))
+        self.client.send(Protocol("START_SCREEN_SHARE", self.userinfo, {}).to_str().encode('utf-8'))
         #self.is_sharing_screen = True
         #self.client.send(Protocol("START_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
         #threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
@@ -171,7 +181,7 @@ class LobbyWindow:
             return
 
         self.is_sharing_screen = False"""
-        self.client.send(Protocol("STOP_SCREEN_SHARE", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("STOP_SCREEN_SHARE", self.userinfo, {}).to_str().encode('utf-8'))
 
         #self.sharing_label.pack_forget()  # Hide the flashing red label
 
@@ -188,7 +198,7 @@ class LobbyWindow:
         if not self.is_sharing_screen:
             self.is_sharing_screen = True
             threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
-            threading.Thread(target=self.capture_and_send_sound, daemon=True).start()
+            #threading.Thread(target=self.capture_and_send_sound, daemon=True).start()
 
     def capture_and_send_sound(self):
         """Capture sound data."""
@@ -198,20 +208,31 @@ class LobbyWindow:
                 # This could involve using a library like pyaudio to capture audio from the microphone
                 # Return the captured sound data as bytes or Base64-encoded string
                 sound_data = "Sound data"
-                self.client.sendall(Protocol("SOUND_DATA", username, {"sound_data": sound_data}).to_str().encode('utf-8'))
-            threading.Event().wait(0.05)
+                self.client.sendall(Protocol("SOUND_DATA", self.userinfo, {"sound_data": sound_data}).to_str().encode('utf-8'))
+            threading.Event().wait(1)
 
         # Implement sound capture logic here
         # This could involve using a library like pyaudio to capture audio from the microphone
         # Return the captured sound data as bytes or Base64-encoded string
+    def split_and_send_screen(self, frame_id, img_bytes):
+        global server_udp_addr, client_udp
+        total_chunks = (len(img_bytes) // PACKET_SIZE) + 1
+        for chunk_id in range(total_chunks):
+            chunk = img_bytes[chunk_id * PACKET_SIZE : (chunk_id + 1) * PACKET_SIZE]
+            packet = Protocol("SCREEN_DATA_CHUNK", self.userinfo, {"frame_id": frame_id, "total_chunks": total_chunks, "chunk_id": chunk_id, "chunk": chunk}).to_str().encode('utf-8')
+            client_udp.sendto(packet, server_udp_addr)
+
         
+
 
 
     def capture_and_send_screen(self):
         """Capture the screen and send it to the server."""
+        frame_id = 0
         while self.is_sharing_screen:
             print("Sharing screen")
             try:
+                frame_id += 1
                 # Capture the screen
                 screenshot = pyautogui.screenshot()
 
@@ -236,17 +257,19 @@ class LobbyWindow:
                 # Capture sound if sound sharing is enabled
                 
                 # Send the screen data (and sound data if applicable) to the server
-                self.client.sendall(Protocol("SCREEN_DATA", username, {
+                """self.client.sendall(Protocol("SCREEN_DATA", username, {
                     "image_data": img_base64,
                 }).to_str().encode('utf-8'))
-
+                """
+                self.split_and_send_screen(frame_id, img_base64)
                 # Send the screen data to the server
                 #self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
 
                 # Add a small delay to avoid overloading the network
-                threading.Event().wait(0.05)  # Wait for 0.5 seconds
+                threading.Event().wait(0.04)  # Wait for 0.5 seconds
             except Exception as e:
                 logging.error(f"Error capturing or sending screen: {e}")
+                raise(e)
                 break
 
     def handle_message(self, message, lobby_window, chat_window, chat_root):
@@ -347,21 +370,19 @@ class LobbyWindow:
             self.chat_menu.entryconfig("Exit Chat", state=tk.DISABLED)
 
     def create_room(self):
-        global username
         if connected_room_code:
             messagebox.showinfo("Info", "You are already in a room.")
             return
         #username = simpledialog.askstring("Username", "Enter your username:", parent=self.root)
-        if username:
-            self.client.send(Protocol("CREATE_ROOM", username, {}).to_str().encode('utf-8'))
+        if self.userinfo:
+            self.client.send(Protocol("CREATE_ROOM", self.userinfo, {}).to_str().encode('utf-8'))
 
     def join_room(self):
-        global username
         if connected_room_code:
             messagebox.showinfo("Info", "You are already in a room.")
             return
         #username = simpledialog.askstring("Username", "Enter your username:", parent=self.root)
-        if username:
+        if self.userinfo:
             room_code = simpledialog.askstring("Room Code", "Enter room code:", parent=self.root)
             while room_code == None:
                 room_code = simpledialog.askstring("Room Code", "Enter room code:", parent=self.root)
@@ -370,7 +391,7 @@ class LobbyWindow:
                 room_pwd = simpledialog.askstring("Room Password", "Enter room password:", parent=self.root)
 
             if room_code and room_pwd:
-                self.client.send(Protocol("JOIN_ROOM", username, {"room_code": room_code, "room_pwd": room_pwd}).to_str().encode('utf-8'))
+                self.client.send(Protocol("JOIN_ROOM", self.userinfo, {"room_code": room_code, "room_pwd": room_pwd}).to_str().encode('utf-8'))
 
     def leave_room(self):
         if self.is_sharing_screen:
@@ -378,19 +399,19 @@ class LobbyWindow:
         if not connected_room_code:
             messagebox.showinfo("Info", "You are not in a room.")
             return
-        self.client.send(Protocol("LEAVE_ROOM", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("LEAVE_ROOM", self.userinfo, {}).to_str().encode('utf-8'))
 
     def close_room(self):
         if not connected_room_code:
             messagebox.showinfo("Info", "You are not in a room.")
             return
-        self.client.send(Protocol("CLOSE_ROOM", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("CLOSE_ROOM", self.userinfo, {}).to_str().encode('utf-8'))
 
     def check_room_status(self):
         if not connected_room_code:
             messagebox.showinfo("Info", "You are not in a room.")
             return
-        self.client.send(Protocol("ROOM_STATUS", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("ROOM_STATUS", self.userinfo, {}).to_str().encode('utf-8'))
 
     def enter_chat(self):
         if not connected_room_code:
@@ -399,13 +420,13 @@ class LobbyWindow:
         if IN_CHAT:
             messagebox.showinfo("Info", "You are already in the chat.")
             return
-        self.client.send(Protocol("ENTER_CHAT", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("ENTER_CHAT", self.userinfo, {}).to_str().encode('utf-8'))
 
     def exit_chat(self):
         if not IN_CHAT:
             messagebox.showinfo("Info", "You are not in the chat.")
             return
-        self.client.send(Protocol("LEAVE_CHAT", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("LEAVE_CHAT", self.userinfo, {}).to_str().encode('utf-8'))
 
     def display_message(self, message):
         """Display a message in the lobby chat area."""
@@ -418,13 +439,14 @@ class LobbyWindow:
         """Handle window close event."""
         if connected_room_code:
             self.leave_room()
-        self.client.send(Protocol("DISCONNECT", username, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("DISCONNECT", self.userinfo, {}).to_str().encode('utf-8'))
         self.root.destroy()
 
 class ChatWindow:
-    def __init__(self, root, client):
+    def __init__(self, root, userinfo, client):
         self.root = root
         self.client = client
+        self.userinfo = userinfo
         self.root.title("Chat")
         self.root.geometry("600x400")
 
@@ -456,15 +478,32 @@ class ChatWindow:
     def on_close(self):
         """Handle window close event."""
         if IN_CHAT:
-            self.client.send(Protocol("LEAVE_CHAT", username, {}).to_str().encode('utf-8'))
+            self.client.send(Protocol("LEAVE_CHAT", self.userinfo, {}).to_str().encode('utf-8'))
         self.root.withdraw()  # Hide the chat window instead of destroying it
 
 def connect_to_server():
     try:
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((SERVER_HOST, SERVER_PORT))
+        client_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_tcp.connect((SERVER_HOST, SERVER_PORT))
+
+
+        udp_server_port = Protocol.from_str(client_tcp.recv(1024).decode('utf-8')).data["udp_port"]
+        server_udp_addr = (SERVER_HOST, udp_server_port) 
+        print(f"Received server's UDP port: {udp_server_port}")
+        client_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client_udp.bind(('0.0.0.0', 0)) # Bind to any available port
+        client_udp_port = client_udp.getsockname()[1]  # Get the assigned port
+        
+        print(f"UDP socket is ready on port {client_udp_port}")
+        client_tcp.send(Protocol("UDP_PORT", userinfo, {"udp_port": client_udp_port}).to_str().encode('utf-8'))
+        ACK1 = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))  # Wait for the server to acknowledge the UDP port
+        print(f"Received ACK1: {ACK1}")
+        ACK2, addr = client_udp.recvfrom(1024)
+        ACK2 = ACK2.decode('utf-8')
+        print(f"Received ACK2: {ACK2} from {addr}")
+        client_udp.sendto("CONNECTED".encode('utf-8'), server_udp_addr)
         logging.info("Connected to the server.")
-        return client
+        return client_tcp, client_udp, server_udp_addr
     except Exception as e:
         logging.error(f"Failed to connect to the server: {e}")
         messagebox.showerror("Error", f"Failed to connect to the server: {e}")
@@ -486,13 +525,44 @@ def listen_for_messages(client):
             logging.error(f"Error receiving message: {e}")
             break
 
+def listen_for_udp_messages():
+    """Listen for incoming UDP messages from the server."""
+    global client_udp, server_udp_addr
+    buffer = {}
+    current_frame_id = 0
+    while True:
+        try:
+            chunk, addr = client_udp.recvfrom(2*PACKET_SIZE)
+            if addr == server_udp_addr:
+                packet = Protocol.from_str(chunk.decode('utf-8'))
+                if packet.command == "SCREEN_DATA_CHUNK":
+                    if packet.data["frame_id"] == current_frame_id:
+                        client_udp_msg.info(f"Received chunk {packet.data['chunk_id']} / {packet.data['total_chunks']} of frame {packet.data['frame_id']}")
+                        buffer[packet.data["chunk_id"]] = packet.data["chunk"]
+
+                        if len(buffer) == packet.data["total_chunks"]:
+                            image_data = "".join(buffer.values())
+                            message_queue.put(Protocol("SCREEN_DATA", packet.sender, {"image_data": image_data}))
+                            client_udp_msg.info(f"frame {current_frame_id} finished")
+                            buffer.clear()
+                    elif packet.data["frame_id"] > current_frame_id:
+                        buffer.clear()
+                        current_frame_id = packet.data["frame_id"]
+                        buffer[packet.data["chunk_id"]] = packet.data["chunk"]
+                        logging.info(f"Received frame {current_frame_id} from {packet.sender} ")
+                    elif packet.data["frame_id"] < current_frame_id:
+                        continue
+        except Exception as e:
+            logging.error(f"Error receiving UDP message: {e}")
+            break
+
 def send_message(client, message):
     if connected_room_code:
-        client.send(Protocol("SEND_CHAT_MESSAGE", username, {"message": message}).to_str().encode('utf-8'))
+        client.send(Protocol("SEND_CHAT_MESSAGE", userinfo, {"message": message}).to_str().encode('utf-8'))
     else:
         messagebox.showinfo("Info", "You are not in a room.")
 def get_user_info(root):
-    global USER_NAME, EMAIL, username
+    global USER_NAME, EMAIL, userinfo
     while True:
         USER_NAME = simpledialog.askstring("Username", "Enter your username:", parent=root)
         val = True
@@ -522,26 +592,28 @@ def get_user_info(root):
             messagebox.showerror("Error", "Email is too short.")
         if val:
             break
-    username = {"username": USER_NAME, "email": EMAIL}
-    return username
+    userinfo = {"username": USER_NAME, "email": EMAIL}
+    return userinfo
 
 def main():
-    global USER_NAME, EMAIL, username
+    global USER_NAME, EMAIL, userinfo, client_tcp, client_udp, server_udp_addr
     root = tk.Tk()
     
-    username = get_user_info(root)
-    client = connect_to_server()
-    if client:
+    userinfo = get_user_info(root)
+    
+    client_tcp, client_udp, server_udp_addr = connect_to_server()
+    if client_tcp:
         # Create the lobby window
-        lobby_window = LobbyWindow(root, client)
+        lobby_window = LobbyWindow(root,userinfo=userinfo,client=client_tcp, client_udp=client_udp, server_udp_addr=server_udp_addr)
 
         # Create the chat window (initially hidden)
         chat_root = tk.Toplevel(root)
         chat_root.withdraw()  # Hide the chat window initially
-        chat_window = ChatWindow(chat_root, client)
+        chat_window = ChatWindow(chat_root,userinfo=userinfo, client= client_tcp)
 
         # Start the message listener thread
-        threading.Thread(target=listen_for_messages, args=(client,), daemon=True).start()
+        threading.Thread(target=listen_for_messages, args=(client_tcp,), daemon=True).start()
+        threading.Thread(target=listen_for_udp_messages, daemon=True).start()
 
         # Process messages in the main thread
         def process_messages():

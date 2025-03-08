@@ -15,7 +15,9 @@ import random
 # Server configuration
 HOST = '0.0.0.0'
 PORT = 12345
+UDP_PORT = 12346
 BUFFER_SIZE = 100000 
+PACKET_SIZE = 1024  # 1 KB
 
 # Logging configuration
 logging.basicConfig(
@@ -44,6 +46,12 @@ traffic_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\serv
 traffic_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 traffic_logger.addHandler(traffic_handler)
 
+server_udp_msg = logging.getLogger('server_udp_msg')
+server_udp_msg.setLevel(logging.INFO)
+server_udp_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\server_udp_msg.log')
+server_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+server_udp_msg.addHandler(server_udp_handler)
+
 def genarate_room_pwd():
     while True:
         password = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=7))
@@ -54,13 +62,17 @@ def send(receiver, message):
     receiver.send(message)
     traffic_logger.info(f"SENT to {receiver.getpeername()}: {message.decode('utf-8')}")
 
+def send_udp(server_udp_socket, receiver_address, message):
+    server_udp_socket.sendto(message, receiver_address)
+    traffic_logger.info(f"SENT to {receiver_address}: {message.decode('utf-8')}")
+
 
 def send_chat_message(room_code, message, sender="server", toSender=True):
     if room_code in rooms.keys():
         for member in rooms[room_code].get_chat_members():
             if sender == "server" or toSender or member != sender:
                 member.send(message.to_str().encode('utf-8'))
-                traffic_logger.info(f"SENT to {member.get_address()}: {message.to_str()}")
+                traffic_logger.info(f"SENT to {member.get_tcp_address()}: {message.to_str()}")
     else:
         logging.error(f"Room {room_code} not found.")
 
@@ -69,15 +81,54 @@ def broadcast_message(room_code, message):
     if room_code in rooms.keys():
         for member in rooms[room_code].get_members():
             member.send(message.to_str().encode('utf-8'))
-            traffic_logger.info(f"SENT to {member.get_address()}: {message.to_str()}")
+            traffic_logger.info(f"SENT to {member.get_tcp_address()}: {message.to_str()}")
     else:
         logging.error(f"Room {room_code} not found.")
 
 
-def handle_client(client_socket, client_address):
-    logging.info(f"New connection from {client_address}")
+def broadcast_UDP(room_code, message):
+    if room_code in rooms.keys():
+        for member in rooms[room_code].get_members():
+            send_udp(server_udp_socket, member.get_udp_address(), message)
+            traffic_logger.info(f"SENT to {member.get_tcp_address()}: {message.to_str()}")
+    else:
+        logging.error(f"Room {room_code} not found.")
 
-    client = MEMBER(client_socket, client_address, None)
+def find_member_by_udp_address(udp_address):
+    for client in clients:
+        if client.get_udp_address() == udp_address:
+            if client not in rooms[client.get_room_code()].get_members():
+                raise Exception("Client not in the right room.")
+            return client
+    return None
+
+def handle_udp(server_udp_socket):
+    while True:
+        data, addr = server_udp_socket.recvfrom(2*PACKET_SIZE)
+        message = Protocol.from_str(data.decode('utf-8'))
+        if not message:
+            break
+        traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
+        command = message.command
+        if command == "SCREEN_DATA" or command == "SCREEN_DATA_CHUNK":
+            client = find_member_by_udp_address(addr)
+            room_code = client.get_room_code()
+            if room_code in rooms.keys():
+                if ((rooms[room_code].get_sharing() != None) and (rooms[room_code].get_sharing().get_udp_address() == addr)):
+                    for member in rooms[room_code].get_members():
+                        send_udp(server_udp_socket, member.get_udp_address(), data)
+                        server_udp_msg.info(f"SENT to {member.get_tcp_address()}: SCREEN_DATA")
+                else:
+                    send_udp(server_udp_socket, addr, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
+                    logging.error(f"Client {client.get_tcp_address()} tried to send screen data but they are not sharing their screen.")
+            else:
+                logging.error(f"Room {room_code} not found.")
+        
+
+def handle_client(client_socket, client_address, client_udp_address):
+    logging.info(f"New connection from {client_address}, UDP address: {client_udp_address}")
+
+    client = MEMBER(client_socket, client_address, client_udp_address, None)
     while True:
         try:
             data = b""
@@ -142,21 +193,24 @@ def handle_client(client_socket, client_address):
                     if room_code in rooms.keys():
                         rooms[room_code].remove_chat_member(client)
                         send(client_socket, Protocol("LEFT_CHAT", "server", {}).to_str().encode('utf-8'))
-                        send_chat_message(room_code, Protocol("CHAT_MESSAGE", "server", {"message": f"{message.sender['username']} has left the chat."}))
+                        broadcast_message(room_code, Protocol("CHAT_MESSAGE", "server", {"message": f"{message.sender['username']} has left the chat."}))
+                        chat_logger.info(f"{message.sender['username']} has left the chat.")
+                        #send_chat_message(room_code, Protocol("CHAT_MESSAGE", "server", {"message": f"{message.sender['username']} has left the chat."}))
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "You must be in a room to chat."}).to_str().encode('utf-8'))
             elif command == "SEND_CHAT_MESSAGE":
                 room_code = client.get_room_code()
-                if room_code != None:
+                if room_code != None and room_code in rooms.keys():
                     if client in rooms[room_code].get_chat_members():
-                        room_code = client.get_room_code()
-                        if len(rooms[room_code].get_chat_members()) > 1:
+                        broadcast_message(room_code, Protocol("CHAT_MESSAGE", message.sender["username"], {"message": message.data["message"]}))
+                        chat_logger.info(f"{message.sender['username']}: {message.data['message']}")
+                        """if len(rooms[room_code].get_chat_members()) > 1:
                             send_chat_message(room_code, Protocol("CHAT_MESSAGE", message.sender["username"], {"message": message.data["message"]}), client)
                             chat_logger.info(f"{message.sender}: {message.data['message']}")
                         else:
-                            send(client_socket, Protocol("ERROR", "server", {"message": "Both users must be in the room to chat."}).to_str().encode('utf-8'))
+                            send(client_socket, Protocol("ERROR", "server", {"message": "Both users must be in the room to chat."}).to_str().encode('utf-8'))"""
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "You must be in the chat to send messages."}).to_str().encode('utf-8'))
                 else:
@@ -177,9 +231,11 @@ def handle_client(client_socket, client_address):
                             rooms[room_code].set_host(new_host)
                             broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}))
                     elif client in rooms[room_code].get_members():
-                        rooms[room_code].remove_member(client)
                         client.set_room_code(None)
                         broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
+                    if client in rooms[room_code].get_chat_members():
+                        rooms[room_code].remove_chat_member(client)
+                        broadcast_message(room_code, Protocol("CHAT_MESSAGE", "server", {"message": f"{message.sender['username']} has left the chat."}))
                     if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
                         del rooms[room_code]
                         rooms.pop(room_code, None)
@@ -210,18 +266,28 @@ def handle_client(client_socket, client_address):
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "Only the host can close the room."}).to_str().encode('utf-8'))
             elif command == "START_SCREEN_SHARE":
+                """room_code = client.get_room_code()
+                if room_code in rooms.keys():
+                    if(rooms[room_code].get_sharing() == None):
+                        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        udp_socket.bind((HOST, UDP_PORT))
+                        send(client_socket, Protocol("WAITING_SCREEN_SHARE_CONNECTION", "server", {"port": UDP_PORT}).to_str().encode('utf-8'))
+                        udp_socket.listen(5)
+                        client_socket, client_address = udp_socket.accept()
+                        """
+                
+
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
                     if(rooms[room_code].get_sharing() == None):
                         rooms[room_code].set_sharing(client)
-                        share_sound = message.data.get("share_sound", False)
-                        send(client_socket, Protocol("SCREEN_SHARE_APPROVED", "server", {"share_sound": share_sound}).to_str().encode('utf-8'))
+                        send(client_socket, Protocol("SCREEN_SHARE_APPROVED", "server", {"share_sound": ""}).to_str().encode('utf-8'))
                         send(client_socket, Protocol("SCREEN_SHARE_APPROVED", "server", {}).to_str().encode('utf-8'))
                         broadcast_message( room_code, Protocol("USER_STARTED_SCREEN_SHARE", "server", {
                             "username": message.sender["username"],
-                            "share_sound": share_sound
+                            "share_sound": "share_sound"
                         }))
-                        logging.info(f"{message.sender['username']} started screen sharing in room {room_code} (Sound: {share_sound})")
+                        logging.info(f"{message.sender['username']} started screen sharing in room {room_code} (Sound: share_sound)")
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "Screen sharing is already in progress."}).to_str().encode('utf-8'))
                         logging.error(f"{message.sender['username']} tried to start screen sharing in room {room_code} but screen sharing is already in progress.")
@@ -264,7 +330,7 @@ def handle_client(client_socket, client_address):
                                     "image_data": message.data["image_data"],
                                     "sound_data": message.data.get("sound_data")
                                 }).to_str().encode('utf-8'))
-                                traffic_logger.info(f"SENT to {member.get_address()}: SCREEN_DATA")
+                                traffic_logger.info(f"SENT to {member.get_tcp_address()}: SCREEN_DATA")
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
                         logging.error(f"{message.sender['username']} tried to send screen data in room {room_code} but they are not sharing their screen.")
@@ -278,7 +344,7 @@ def handle_client(client_socket, client_address):
                         for member in rooms[room_code].get_members():
                             with lock:
                                 member.send(Protocol("SOUND_DATA", message.sender["username"], message.data).to_str().encode('utf-8'))
-                                traffic_logger.info(f"SENT to {member.get_address()}: SHARE_SOUND")
+                                traffic_logger.info(f"SENT to {member.get_tcp_address()}: SHARE_SOUND")
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
                         logging.error(f"{message.sender['username']} tried to share sound in room {room_code} but they are not sharing their screen.")
@@ -323,15 +389,35 @@ def handle_client(client_socket, client_address):
 
 
 def start_server():
+    global server_udp_socket
     try:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.bind((HOST, PORT))
         server.listen(5)
+
+        server_udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        server_udp_socket.bind(('0.0.0.0', UDP_PORT))
         logging.info(f"Server listening on {HOST}:{PORT}")
 
         while True:
-            client_socket, client_address = server.accept()
-            threading.Thread(target=handle_client, args=(client_socket, client_address)).start()
+            client_tcp_socket, client_tcp_address = server.accept()
+            client_tcp_socket.send(Protocol("UDP_PORT", "server", {"udp_port": UDP_PORT}).to_str().encode('utf-8'))
+            client_udp_addr_str = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
+            if client_udp_addr_str.command == "UDP_PORT":
+                client_udp_address = (client_tcp_address[0], int(client_udp_addr_str.data["udp_port"]))
+                logging.info(f"Received UDP address: {client_udp_address}")
+                print(f"Received UDP address: {client_udp_address}")
+                client_tcp_socket.send(Protocol("CONNECTED", "server", {}).to_str().encode('utf-8'))
+                server_udp_socket.sendto(b"CONNECTED", client_udp_address)
+                ACK1, addr = server_udp_socket.recvfrom(1024)
+                print(ACK1.decode('utf-8'))
+                if(ACK1.decode('utf-8') == "CONNECTED"):
+                    logging.info(f"UDP connection established with {client_udp_address}")
+                    threading.Thread(target=handle_client, args=(client_tcp_socket, client_tcp_address, client_udp_address)).start()
+                    threading.Thread(target=handle_udp, args=(server_udp_socket,)).start()
+            else:
+                raise Exception("Invalid UDP port message.")
+            
     except Exception as e:
         logging.error(f"Server error: {e}")
     finally:
