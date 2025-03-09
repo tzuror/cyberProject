@@ -17,7 +17,7 @@ HOST = '0.0.0.0'
 PORT = 12345
 UDP_PORT = 12346
 BUFFER_SIZE = 100000 
-PACKET_SIZE = 1024  # 1 KB
+PACKET_SIZE = 1024 *50  # 1 KB
 
 # Logging configuration
 logging.basicConfig(
@@ -94,41 +94,27 @@ def broadcast_UDP(room_code, message):
     else:
         logging.error(f"Room {room_code} not found.")
 
-def find_member_by_udp_address(udp_address):
+def find_member_by_udp_address(udp_address) -> MEMBER:
     for client in clients:
         if client.get_udp_address() == udp_address:
-            if client not in rooms[client.get_room_code()].get_members():
+            if client.get_room_code() != None and client not in rooms[client.get_room_code()].get_members():
                 raise Exception("Client not in the right room.")
             return client
     return None
 
-def handle_udp(server_udp_socket):
-    while True:
-        data, addr = server_udp_socket.recvfrom(2*PACKET_SIZE)
-        message = Protocol.from_str(data.decode('utf-8'))
-        if not message:
-            break
-        traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
-        command = message.command
-        if command == "SCREEN_DATA" or command == "SCREEN_DATA_CHUNK":
-            client = find_member_by_udp_address(addr)
-            room_code = client.get_room_code()
-            if room_code in rooms.keys():
-                if ((rooms[room_code].get_sharing() != None) and (rooms[room_code].get_sharing().get_udp_address() == addr)):
-                    for member in rooms[room_code].get_members():
-                        send_udp(server_udp_socket, member.get_udp_address(), data)
-                        server_udp_msg.info(f"SENT to {member.get_tcp_address()}: SCREEN_DATA")
-                else:
-                    send_udp(server_udp_socket, addr, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
-                    logging.error(f"Client {client.get_tcp_address()} tried to send screen data but they are not sharing their screen.")
-            else:
-                logging.error(f"Room {room_code} not found.")
+def find_member_by_tcp_address(tcp_address) -> MEMBER:
+    for client in clients:
+        if client.get_tcp_address() == tcp_address:
+            if client.get_room_code() != None and client not in rooms[client.get_room_code()].get_members() :
+                raise Exception("Client not in the right room.")
+            return client
+    return None
+
         
 
-def handle_client(client_socket, client_address, client_udp_address):
+def handle_client(client_socket, client_address, client_udp_address, client: MEMBER):
     logging.info(f"New connection from {client_address}, UDP address: {client_udp_address}")
 
-    client = MEMBER(client_socket, client_address, client_udp_address, None)
     while True:
         try:
             data = b""
@@ -386,6 +372,34 @@ def handle_client(client_socket, client_address, client_udp_address):
     finally:
         client_socket.close()
         
+def handle_udp(server_udp_socket):
+    while True:
+        data, addr = server_udp_socket.recvfrom(2*PACKET_SIZE)
+        if Protocol.is_str_valid(data.decode('utf-8')):
+            message = Protocol.from_str(data.decode('utf-8'))
+            if not message:
+                break
+            traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
+            command = message.command
+            if command == "SCREEN_DATA" or command == "SCREEN_DATA_CHUNK":
+                client = find_member_by_udp_address(addr)
+                if client != None:
+                    room_code = client.get_room_code()
+                    if room_code in rooms.keys():
+                        if ((rooms[room_code].get_sharing() != None) and (rooms[room_code].get_sharing().get_udp_address() == addr)):
+                            for member in rooms[room_code].get_members():
+                                send_udp(server_udp_socket, member.get_udp_address(), data)
+                                server_udp_msg.info(f"SENT to {member.get_tcp_address()}: SCREEN_DATA")
+                        else:
+                            send_udp(server_udp_socket, addr, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
+                            logging.error(f"Client {client.get_tcp_address()} tried to send screen data but they are not sharing their screen.")
+                    else:
+                        logging.error(f"Room {room_code} not found.")
+                else:
+                    logging.error(f"Client not found.")
+        else:
+            logging.error(f"Invalid message: {data.decode('utf-8')}")
+            break
 
 
 def start_server():
@@ -398,25 +412,31 @@ def start_server():
         server_udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         server_udp_socket.bind(('0.0.0.0', UDP_PORT))
         logging.info(f"Server listening on {HOST}:{PORT}")
-
+        threading.Thread(target=handle_udp, args=(server_udp_socket,)).start()
         while True:
-            client_tcp_socket, client_tcp_address = server.accept()
-            client_tcp_socket.send(Protocol("UDP_PORT", "server", {"udp_port": UDP_PORT}).to_str().encode('utf-8'))
-            client_udp_addr_str = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
-            if client_udp_addr_str.command == "UDP_PORT":
+            try:
+                client_tcp_socket, client_tcp_address = server.accept()
+                client_tcp_socket.send(Protocol("UDP_PORT", "server", {"udp_port": UDP_PORT}).to_str().encode('utf-8'))
+
+                got_udp_port  = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
+                if got_udp_port.command == "GOT_UDP_PORT":
+                    client_tcp_socket.send(Protocol("ACK", "server", {}).to_str().encode('utf-8'))
+                else:
+                    raise Exception("Invalid UDP port message.")
+                client_udp_addr_str = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
+                if client_udp_addr_str.command == "UDP_PORT":
+                    send(client_tcp_socket, Protocol("GOT_UDP_PORT", "server", {}).to_str().encode('utf-8'))
+                else:
+                    raise Exception("Invalid UDP port message.")
                 client_udp_address = (client_tcp_address[0], int(client_udp_addr_str.data["udp_port"]))
-                logging.info(f"Received UDP address: {client_udp_address}")
-                print(f"Received UDP address: {client_udp_address}")
-                client_tcp_socket.send(Protocol("CONNECTED", "server", {}).to_str().encode('utf-8'))
-                server_udp_socket.sendto(b"CONNECTED", client_udp_address)
-                ACK1, addr = server_udp_socket.recvfrom(1024)
-                print(ACK1.decode('utf-8'))
-                if(ACK1.decode('utf-8') == "CONNECTED"):
+                ack_msg = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
+                if ack_msg.command == "ACK":
                     logging.info(f"UDP connection established with {client_udp_address}")
-                    threading.Thread(target=handle_client, args=(client_tcp_socket, client_tcp_address, client_udp_address)).start()
-                    threading.Thread(target=handle_udp, args=(server_udp_socket,)).start()
-            else:
-                raise Exception("Invalid UDP port message.")
+                    client = MEMBER(client_tcp_socket, client_tcp_address, client_udp_address, None)
+                    threading.Thread(target=handle_client, args=(client_tcp_socket, client_tcp_address, client_udp_address, client)).start()
+            except Exception as e:
+                logging.error(f"Error handling client connection")
+                continue
             
     except Exception as e:
         logging.error(f"Server error: {e}")

@@ -1,8 +1,9 @@
 
 class MEMBER:
-    def __init__(self, socket, address, name, email = None, room_code=None, id= None):
+    def __init__(self, socket, tcp_address, udp_address, name, email = None, room_code=None, id= None):
         self.socket = socket
-        self.address = address
+        self.tcp_address = tcp_address
+        self.udp_address = udp_address
         self.name = name
         self.room_code = room_code
         self.email = email
@@ -14,8 +15,11 @@ class MEMBER:
     def get_socket(self):
         return self.socket
 
-    def get_address(self):
-        return self.address
+    def get_tcp_address(self):
+        return self.tcp_address
+    
+    def get_udp_address(self):
+        return self.udp_address
 
     def get_name(self):
         return self.name
@@ -37,8 +41,11 @@ class MEMBER:
     def set_id(self, id):
         self.id = id
     def __str__(self):
-        return f"{self.name} - {self.email} - {self.socket.getpeername()}"
-
+        try:
+            return f"{self.name} - {self.email} - UDP : {self.get_udp_address()} -  TCP : {self.socket.getpeername()}"
+        except Exception as e:
+            print(e)
+            return f"{self.name} "
 
 class ROOM:
     def __init__(self, code, host: MEMBER, status: str, room_pwd: str):

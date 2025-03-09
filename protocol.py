@@ -31,6 +31,12 @@ class Protocol:
             sender=data_dict.get("sender"),
             data=data_dict.get("data")
         )
+    def is_str_valid(data_str):
+        try:
+            json.loads(data_str)
+        except json.JSONDecodeError:
+            return False
+        return True
     @classmethod
     def from_str(cls, data_str):
         data_dict = json.loads(data_str)
@@ -41,14 +47,14 @@ class Protocol:
 
 # Example usage
 if __name__ == "__main__":
-    protocol = Protocol("CREATE_ROOM", {"1":"user123", "2":"3"}, {"room_name": "example_room"})
+    protocol = Protocol("CREATE_ROOM", {"1":"user123", "2":"3"}, {})
     print(protocol)
 
     protocol_dict = protocol.to_str()
     print(protocol_dict)
 
     new_protocol = Protocol.from_str(protocol_dict)
-    print(new_protocol.sender["1"])
+    print(new_protocol.data)
 
     # Create a socket object
     
