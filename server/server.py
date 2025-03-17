@@ -11,7 +11,6 @@ import tkinter as tk
 from tkinter import scrolledtext
 from server_objects import MEMBER, ROOM
 import random
-import queue
 
 # Server configuration
 HOST = '0.0.0.0'
@@ -19,8 +18,6 @@ PORT = 12345
 UDP_PORT = 12346
 BUFFER_SIZE = 1024
 PACKET_SIZE = 1024 *50  # 1 KB
-
-message_queue = queue.Queue()  
 
 # Logging configuration
 logging.basicConfig(
@@ -126,55 +123,6 @@ def generate_member_id() -> str:
         if str(i) not in member_ids:
             return str(i)
 
-def handle_client(client_socket, client_address, client_udp_address, client: MEMBER):
-    logging.info(f"New connection from {client_address}, UDP address: {client_udp_address}")
-
-    while True:
-        try:
-            data = b""
-            while True:
-                part = client_socket.recv(BUFFER_SIZE)
-                data += part
-                if len(part) < BUFFER_SIZE:
-                    break
-            message = Protocol.from_str(data.decode('utf-8'))
-            if not message:
-                break
-            traffic_logger.info(f"RECEIVED from {client_address}: {message.to_str()}")
-
-            # Add the message to the queue for processing
-            message_queue.put((client, message))
-
-        except Exception as e:
-            logging.error(f"Error handling client: {e}")
-            break
-
-    # Handle client disconnection
-    try:
-        room_code = client.get_room_code()
-        if client in clients:
-            if room_code in rooms.keys() and room_code != None:
-                if rooms[room_code].get_host() == client:
-                    rooms[room_code].set_host(None)
-                    rooms[room_code].remove_member(client)
-                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": client.get_name()}))
-                elif client in rooms[room_code].get_members():
-                    rooms[room_code].remove_member(client)
-                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": client.get_name()}))
-                if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
-                    del rooms[room_code]
-                    rooms.pop(room_code, None)
-                elif rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) > 0:
-                    new_host = list(rooms[room_code].get_members())[0]
-                    rooms[room_code].set_host(new_host)
-                    broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}).to_str().encode('utf-8')))
-            clients.remove(client)
-            del client
-        logging.info(f"Client {client_address} disconnected")
-    except Exception as e:
-        logging.error(f"Error handling client disconnection: {e}")
-    finally:
-        client_socket.close()
         
 
 def handle_client(client_socket, client_address, client_udp_address, client: MEMBER):
@@ -432,7 +380,7 @@ def handle_udp(server_udp_socket):
             message = Protocol.from_str(data.decode('utf-8'))
             if not message:
                 break
-            #traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
+            traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
             command = message.command
             if command == "SCREEN_DATA" or command == "SCREEN_DATA_CHUNK":
                 client = find_member_by_udp_address(addr)
