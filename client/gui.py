@@ -18,12 +18,13 @@ from network import send_message
 from screen_share import capture_and_send_screen
 import re
 class LobbyWindow:
-    def __init__(self, root, userinfo, client, client_udp, server_udp_addr, connected_room_code= None, connected_room_password= None, in_chat= False):
+    def __init__(self, root, userinfo, client, client_udp, server_udp_addr, member_id, connected_room_code= None, connected_room_password= None, in_chat= False):
         self.root = root
         self.client = client
         self.userinfo = userinfo
         self.client_udp = client_udp
         self.server_udp_addr = server_udp_addr
+        self.member_id = member_id
         self.connected_room_code = connected_room_code
         self.connected_room_password = connected_room_password
         self.in_chat = in_chat
@@ -95,6 +96,19 @@ class LobbyWindow:
         self.screen_canvas.bind("<Configure>", self.on_canvas_resize)
         self.last_screen_image = None
 
+        self.room_members_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.room_members_tab, text="Room Members")
+
+        self.refresh_button = tk.Button(self.room_members_tab, text="Refresh", command=self.refresh_members)
+        self.refresh_button.pack(pady=10)
+
+        # Frame to hold member labels and kick buttons
+        self.members_frame = tk.Frame(self.room_members_tab)
+        self.members_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        # Update room members initially
+        self.refresh_members()
+
         # Add a new menu for screen sharing
         self.screen_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.menu_bar.add_cascade(label="Screen Share", menu=self.screen_menu)
@@ -119,6 +133,17 @@ class LobbyWindow:
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+    def refresh_members(self):
+        """Refresh the list of members in the room."""
+        if not self.connected_room_code:
+            return
+
+        # Clear the existing member labels and buttons
+        """for widget in self.members_frame.winfo_children():
+            widget.destroy()"""
+
+        # Request the room status from the server
+       # self.client.send(Protocol("ROOM_STATUS", self.userinfo, {}).to_str().encode('utf-8'))
 
     def set_connected_room_code(self, room_code):
         self.connected_room_code = room_code
@@ -278,7 +303,42 @@ class LobbyWindow:
         # This could involve using a library like pyaudio to play the sound
         print("Playing sound data")
         pass
-    
+
+    def update_members_list(self, host, members):
+        """Update the list of members in the Room Members tab."""
+        # Clear the existing member labels and buttons
+        print(members)
+        for widget in self.members_frame.winfo_children():
+            widget.destroy()
+        host_id = host["id"]
+        host_name = host["name"]
+        host_email = host["email"]
+        # Display the host
+        host_label = tk.Label(self.members_frame, text=f"Host: \nid: {host_id} - {host_name} - {host_email}", anchor="w")
+        host_label.pack(fill=tk.X, pady=5)
+
+        members_label = tk.Label(self.members_frame, text=f"Members:\n", anchor="w")
+        members_label.pack(fill=tk.X, pady=5)
+        # Display each member with a "Kick" button
+        for member in members:
+            member_frame = tk.Frame(self.members_frame)
+            member_frame.pack(fill=tk.X, pady=2)
+            member_id = member["id"]
+            member_name = member["name"]
+            member_email = member["email"]
+            member_label = tk.Label(member_frame, text=f"id: {member_id} - {member_name} - {member_email}", anchor="w")
+            member_label.pack(side=tk.LEFT, padx=5)
+
+            if host["id"] == self.member_id and member["id"] != self.member_id:
+                kick_button = tk.Button(member_frame, text="Kick", command=lambda m=member_id: self.kick_member(m))
+                kick_button.pack(side=tk.RIGHT, padx=5)
+    def kick_member(self, member_id: str):
+        """Kick a member from the room."""
+        if not self.connected_room_code:
+            messagebox.showinfo("Info", "You are not in a room.")
+            return
+
+        self.client.send(Protocol("KICK_MEMBER", self.userinfo, {"username": member_id}).to_str().encode('utf-8'))
 
 
     def update_menu_states(self):

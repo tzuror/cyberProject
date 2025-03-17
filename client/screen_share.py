@@ -60,8 +60,7 @@ def capture_and_send_screen(frame_id, client_udp, server_udp_addr, userinfo):
         # Send the screen data to the server
         #self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
 
-        # Add a small delay to avoid overloading the network
-        threading.Event().wait(0.04)  # Wait for 0.5 seconds
+        
     except Exception as e:
         logging.error(f"Error capturing or sending screen: {e}")
         raise(e)

@@ -11,20 +11,23 @@ import tkinter as tk
 from tkinter import scrolledtext
 from server_objects import MEMBER, ROOM
 import random
+import queue
 
 # Server configuration
 HOST = '0.0.0.0'
 PORT = 12345
 UDP_PORT = 12346
-BUFFER_SIZE = 100000 
+BUFFER_SIZE = 1024
 PACKET_SIZE = 1024 *50  # 1 KB
+
+message_queue = queue.Queue()  
 
 # Logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename=r'C:\Users\ort\Documents\cyberProject\server.log',  # Log to a file
-    filemode='a'  # Append mode
+    filemode='w'  # Append mode
 )
 lock = threading.Lock()
 
@@ -109,7 +112,69 @@ def find_member_by_tcp_address(tcp_address) -> MEMBER:
                 raise Exception("Client not in the right room.")
             return client
     return None
+def find_member_by_id(member_id: str) -> MEMBER:
+    for client in clients:
+        if client.get_id() == member_id:
+            if client.get_room_code() != None and client not in rooms[client.get_room_code()].get_members():
+                raise Exception("Client not in the right room.")
+            return client
+    return None
 
+def generate_member_id() -> str:
+    member_ids = {client.get_id() for client in clients}
+    for i in range(1, len(clients) + 2):
+        if str(i) not in member_ids:
+            return str(i)
+
+def handle_client(client_socket, client_address, client_udp_address, client: MEMBER):
+    logging.info(f"New connection from {client_address}, UDP address: {client_udp_address}")
+
+    while True:
+        try:
+            data = b""
+            while True:
+                part = client_socket.recv(BUFFER_SIZE)
+                data += part
+                if len(part) < BUFFER_SIZE:
+                    break
+            message = Protocol.from_str(data.decode('utf-8'))
+            if not message:
+                break
+            traffic_logger.info(f"RECEIVED from {client_address}: {message.to_str()}")
+
+            # Add the message to the queue for processing
+            message_queue.put((client, message))
+
+        except Exception as e:
+            logging.error(f"Error handling client: {e}")
+            break
+
+    # Handle client disconnection
+    try:
+        room_code = client.get_room_code()
+        if client in clients:
+            if room_code in rooms.keys() and room_code != None:
+                if rooms[room_code].get_host() == client:
+                    rooms[room_code].set_host(None)
+                    rooms[room_code].remove_member(client)
+                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": client.get_name()}))
+                elif client in rooms[room_code].get_members():
+                    rooms[room_code].remove_member(client)
+                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": client.get_name()}))
+                if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
+                    del rooms[room_code]
+                    rooms.pop(room_code, None)
+                elif rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) > 0:
+                    new_host = list(rooms[room_code].get_members())[0]
+                    rooms[room_code].set_host(new_host)
+                    broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}).to_str().encode('utf-8')))
+            clients.remove(client)
+            del client
+        logging.info(f"Client {client_address} disconnected")
+    except Exception as e:
+        logging.error(f"Error handling client disconnection: {e}")
+    finally:
+        client_socket.close()
         
 
 def handle_client(client_socket, client_address, client_udp_address, client: MEMBER):
@@ -192,11 +257,6 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
                     if client in rooms[room_code].get_chat_members():
                         broadcast_message(room_code, Protocol("CHAT_MESSAGE", message.sender["username"], {"message": message.data["message"]}))
                         chat_logger.info(f"{message.sender['username']}: {message.data['message']}")
-                        """if len(rooms[room_code].get_chat_members()) > 1:
-                            send_chat_message(room_code, Protocol("CHAT_MESSAGE", message.sender["username"], {"message": message.data["message"]}), client)
-                            chat_logger.info(f"{message.sender}: {message.data['message']}")
-                        else:
-                            send(client_socket, Protocol("ERROR", "server", {"message": "Both users must be in the room to chat."}).to_str().encode('utf-8'))"""
                     else:
                         send(client_socket, Protocol("ERROR", "server", {"message": "You must be in the chat to send messages."}).to_str().encode('utf-8'))
                 else:
@@ -218,6 +278,7 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
                             broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}))
                     elif client in rooms[room_code].get_members():
                         client.set_room_code(None)
+                        rooms[room_code].remove_member(client)
                         broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
                     if client in rooms[room_code].get_chat_members():
                         rooms[room_code].remove_chat_member(client)
@@ -230,8 +291,9 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
             elif command == "ROOM_STATUS":
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
-                    host_username = str(rooms[room_code].get_host()) if rooms[room_code].get_host() else None
-                    room_members = ",\n".join(list(map(str, rooms[room_code].get_members())))
+                    host_username = {"id": rooms[room_code].get_host().get_name(), "name": rooms[room_code].get_host().get_name(), "email": rooms[room_code].get_host().get_email()} if rooms[room_code].get_host() else None
+                    #room_members = list(map(str, rooms[room_code].get_members()))
+                    room_members = [{"id":member.get_id(), "name": member.get_name(), "email": member.get_email()} for member in rooms[room_code].get_members()]
                     status = rooms[room_code].get_status()
                     send(client_socket, Protocol("ROOM_STATUS", "server", {
                         "status": status,
@@ -252,17 +314,6 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "Only the host can close the room."}).to_str().encode('utf-8'))
             elif command == "START_SCREEN_SHARE":
-                """room_code = client.get_room_code()
-                if room_code in rooms.keys():
-                    if(rooms[room_code].get_sharing() == None):
-                        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                        udp_socket.bind((HOST, UDP_PORT))
-                        send(client_socket, Protocol("WAITING_SCREEN_SHARE_CONNECTION", "server", {"port": UDP_PORT}).to_str().encode('utf-8'))
-                        udp_socket.listen(5)
-                        client_socket, client_address = udp_socket.accept()
-                        """
-                
-
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
                     if(rooms[room_code].get_sharing() == None):
@@ -340,9 +391,11 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
             else:
                 send(client_socket, Protocol("ERROR", "server", {"message": "Invalid command."}).to_str().encode('utf-8'))
                 logging.error(f"Invalid command: {command}")
+                
             
         except Exception as e:
             logging.error(f"Error handling client: {e}")
+            raise e
 
 
     try:        
@@ -379,7 +432,7 @@ def handle_udp(server_udp_socket):
             message = Protocol.from_str(data.decode('utf-8'))
             if not message:
                 break
-            traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
+            #traffic_logger.info(f"RECEIVED from {addr}: {message.to_str()}")
             command = message.command
             if command == "SCREEN_DATA" or command == "SCREEN_DATA_CHUNK":
                 client = find_member_by_udp_address(addr)
@@ -424,19 +477,25 @@ def start_server():
                 else:
                     raise Exception("Invalid UDP port message.")
                 client_udp_addr_str = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
+                member_id = generate_member_id()
                 if client_udp_addr_str.command == "UDP_PORT":
-                    send(client_tcp_socket, Protocol("GOT_UDP_PORT", "server", {}).to_str().encode('utf-8'))
+                   
+                    send(client_tcp_socket, Protocol("GOT_UDP_PORT", "server", {"member_id": member_id}).to_str().encode('utf-8'))
                 else:
                     raise Exception("Invalid UDP port message.")
                 client_udp_address = (client_tcp_address[0], int(client_udp_addr_str.data["udp_port"]))
                 ack_msg = Protocol.from_str(client_tcp_socket.recv(1024).decode('utf-8'))
                 if ack_msg.command == "ACK":
                     logging.info(f"UDP connection established with {client_udp_address}")
-                    client = MEMBER(client_tcp_socket, client_tcp_address, client_udp_address, None)
+                    
+                    print(member_id)
+                    client = MEMBER(client_tcp_socket, client_tcp_address, client_udp_address, None, id=member_id)
+                    print("ho")
+
                     threading.Thread(target=handle_client, args=(client_tcp_socket, client_tcp_address, client_udp_address, client)).start()
             except Exception as e:
                 logging.error(f"Error handling client connection")
-                continue
+                raise e
             
     except Exception as e:
         logging.error(f"Server error: {e}")

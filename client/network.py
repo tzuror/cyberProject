@@ -10,17 +10,25 @@ parent_dir = os.path.abspath(os.path.join(child_dir, '..'))
 sys.path.append(parent_dir)
 from protocol import Protocol
 import constants
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename=r'C:\Users\ort\Documents\cyberProject\client_network.log',  # Log to a file
-    filemode='a'  # Append mode
+    filemode='w'  # Append mode
 )
 client_udp_msg = logging.getLogger('client_udp_msg')
 client_udp_msg.setLevel(logging.INFO)
 client_udp_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\client_udp_msg.log')
 client_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_udp_msg.addHandler(client_udp_handler)
+
+client_recived_udp_msg = logging.getLogger('client_recived_udp_msg')
+client_recived_udp_msg.setLevel(logging.INFO)
+client_recived_udp_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\client_recived_udp_msg.log')
+client_recived_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+client_recived_udp_msg.addHandler(client_recived_udp_handler)
+
 
 
 def connect_to_server(userinfo):
@@ -47,8 +55,12 @@ def connect_to_server(userinfo):
                 got_udp_port_msg = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))
                 if got_udp_port_msg.command == "GOT_UDP_PORT":
                     client_tcp.send(Protocol("ACK", userinfo, {}).to_str().encode('utf-8'))
-                logging.info("Connected to the server.")
-                return client_tcp, client_udp, server_udp_addr
+                   
+                    member_id = got_udp_port_msg.data["member_id"]
+                    print(f"Connected to the server. Member ID: {member_id}")
+                    logging.info("Connected to the server.")
+                    return client_tcp, client_udp, server_udp_addr, member_id
+                    
             else:
                 raise Exception(f"Expected ACK message, but received: {ack_msg}")
         else:
@@ -56,6 +68,7 @@ def connect_to_server(userinfo):
     except Exception as e:
         logging.error(f"Failed to connect to the server: {e}")
         messagebox.showerror("Error", f"Failed to connect to the server: {e}")
+        raise e
         return None
 
 def listen_for_messages(client, message_queue):
@@ -77,23 +90,19 @@ def listen_for_messages(client, message_queue):
 def listen_for_udp_messages(client_udp, server_udp_addr, message_queue):
     """Listen for incoming UDP messages from the server."""
     buffer = {}
-    current_frame_id = 0
+    current_frame_id = 1
     while True:
         try:
             chunk, addr = client_udp.recvfrom(2*constants.PACKET_SIZE)
+            #client_recived_udp_msg.info(f"Received UDP message 1 from {addr} : {chunk}")
             if addr == server_udp_addr:
                 if Protocol.is_str_valid(chunk.decode('utf-8')):
                     packet = Protocol.from_str(chunk.decode('utf-8'))
+                    #client_recived_udp_msg.info(f"Received UDP message 2 from {addr} : {packet}")
                     if packet.command == "SCREEN_DATA_CHUNK":
                         if packet.data["frame_id"] == current_frame_id:
                             client_udp_msg.info(f"Received chunk {packet.data['chunk_id']} / {packet.data['total_chunks']} of frame {packet.data['frame_id']}")
                             buffer[packet.data["chunk_id"]] = packet.data["chunk"]
-
-                            if len(buffer) == packet.data["total_chunks"]:
-                                image_data = "".join(buffer.values())
-                                message_queue.put(Protocol("SCREEN_DATA", packet.sender, {"image_data": image_data}))
-                                client_udp_msg.info(f"frame {current_frame_id} finished")
-                                buffer.clear()
                         elif packet.data["frame_id"] > current_frame_id:
                             buffer.clear()
                             current_frame_id = packet.data["frame_id"]
@@ -101,6 +110,11 @@ def listen_for_udp_messages(client_udp, server_udp_addr, message_queue):
                             logging.info(f"Received frame {current_frame_id} from {packet.sender} ")
                         elif packet.data["frame_id"] < current_frame_id:
                             continue
+                        if len(buffer) == packet.data["total_chunks"]:
+                            image_data = "".join(buffer.values())
+                            message_queue.put(Protocol("SCREEN_DATA", packet.sender, {"image_data": image_data}))
+                            client_udp_msg.info(f"frame {current_frame_id} finished")
+                            buffer.clear()
         except Exception as e:
             logging.error(f"Error receiving UDP message: {e}")
             break
@@ -111,3 +125,4 @@ def send_message(client, message, userinfo, connected_room_code):
         client.send(Protocol("SEND_CHAT_MESSAGE", userinfo, {"message": message}).to_str().encode('utf-8'))
     else:
         messagebox.showinfo("Info", "You are not in a room.")
+

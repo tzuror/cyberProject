@@ -42,7 +42,7 @@ class MEMBER:
         self.id = id
     def __str__(self):
         try:
-            return f"{self.name} - {self.email} - UDP : {self.get_udp_address()} -  TCP : {self.socket.getpeername()}"
+            return f"id - {self.id} - {self.name} - {self.email} - UDP : {self.get_udp_address()} -  TCP : {self.socket.getpeername()}"
         except Exception as e:
             print(e)
             return f"{self.name} "

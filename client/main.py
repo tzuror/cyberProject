@@ -12,7 +12,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename=r'C:\Users\ort\Documents\cyberProject\client.log',  # Log to a file
-    filemode='a'  # Append mode
+    filemode='w'  # Append mode
 )
 lock = threading.Lock()
 message_queue = queue.Queue()  # Thread-safe queue for incoming messages
@@ -22,10 +22,10 @@ def main():
     
     userinfo = get_user_info(root)
     
-    client_tcp, client_udp, server_udp_addr = connect_to_server(userinfo=userinfo)
+    client_tcp, client_udp, server_udp_addr, member_id = connect_to_server(userinfo=userinfo)
     if client_tcp:
         # Create the lobby window
-        lobby_window = LobbyWindow(root,userinfo=userinfo,client=client_tcp, client_udp=client_udp, server_udp_addr=server_udp_addr)
+        lobby_window = LobbyWindow(root,userinfo=userinfo,client=client_tcp, client_udp=client_udp, server_udp_addr=server_udp_addr, member_id=member_id)
 
         # Create the chat window (initially hidden)
         chat_root = tk.Toplevel(root)
@@ -33,8 +33,9 @@ def main():
         chat_window = ChatWindow(chat_root,userinfo=userinfo, client= client_tcp)
 
         # Start the message listener thread
-        threading.Thread(target=listen_for_messages, args=(client_tcp, message_queue), daemon=True).start()
         threading.Thread(target=listen_for_udp_messages,args=(client_udp, server_udp_addr, message_queue), daemon=True).start()
+        threading.Thread(target=listen_for_messages, args=(client_tcp, message_queue), daemon=True).start()
+        
 
         # Process messages in the main thread
         def process_messages():
@@ -155,9 +156,11 @@ def main():
                 status = message.data["status"]
                 host = message.data["host"]
                 members = message.data["members"]
-                lobby_window.display_message(f"Room Status: {status}")
-                lobby_window.display_message(f"Host: {host}")
-                lobby_window.display_message(f"Members: {members}")
+                #members_str = "\n".join(members)
+                #lobby_window.display_message(f"Room Status: {status}")
+                #lobby_window.display_message(f"Host: {host}")
+                #lobby_window.display_message(f"Members: {members_str}")
+                lobby_window.update_members_list(host, members)
             
         root.after(1, process_messages)  # Start processing messages
         root.mainloop()
