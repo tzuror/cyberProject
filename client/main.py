@@ -9,12 +9,18 @@ from tkinter import messagebox
 import constants
 
 logging.basicConfig(
-    level=logging.INFO,
+    level= logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename=r'C:\Users\ort\Documents\cyberProject\client.log',  # Log to a file
-    filemode='w'  # Append mode
+    filename=r'D:\or\cyberProject\client.log',  # Log to a file
+    filemode='w+'  # ]replace mode
 )
+client_msg = logging.getLogger('client_msg')
+client_msg.setLevel(logging.INFO)
+client_handler = logging.FileHandler(r'D:\or\cyberProject\client_msg.log')
+client_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+client_msg.addHandler(client_handler)
 lock = threading.Lock()
+shutdown_flag = threading.Event()
 message_queue = queue.Queue()  # Thread-safe queue for incoming messages
 def main():
     #global USER_NAME, EMAIL, userinfo, client_tcp, client_udp, server_udp_addr
@@ -25,7 +31,7 @@ def main():
     client_tcp, client_udp, server_udp_addr, member_id = connect_to_server(userinfo=userinfo)
     if client_tcp:
         # Create the lobby window
-        lobby_window = LobbyWindow(root,userinfo=userinfo,client=client_tcp, client_udp=client_udp, server_udp_addr=server_udp_addr, member_id=member_id)
+        lobby_window = LobbyWindow(root,userinfo=userinfo,client=client_tcp, client_udp=client_udp, server_udp_addr=server_udp_addr, member_id=member_id, shutdown_flag=shutdown_flag)
 
         # Create the chat window (initially hidden)
         chat_root = tk.Toplevel(root)
@@ -34,7 +40,7 @@ def main():
 
         # Start the message listener thread
         threading.Thread(target=listen_for_udp_messages,args=(client_udp, server_udp_addr, message_queue), daemon=True).start()
-        threading.Thread(target=listen_for_messages, args=(client_tcp, message_queue), daemon=True).start()
+        threading.Thread(target=listen_for_messages, args=(client_tcp, message_queue, shutdown_flag), daemon=True).start()
         
 
         # Process messages in the main thread
@@ -56,7 +62,7 @@ def main():
                     lobby_window.display_screen(message.data["image_data"])
                     
                 except Exception as e:
-                    logging.error(f"Error displaying screen data: {e}")
+                    client_msg.error(f"Error displaying screen data: {e}")
             elif message.command == "SOUND_DATA":
                 lobby_window.play_sound(message.data["sound_data"])
             elif message.command == "SCREEN_SHARE_APPROVED":
@@ -90,7 +96,7 @@ def main():
                     connected_room_password = message.data["room_pwd"]
                     lobby_window.set_connected_room_password(connected_room_password)
                 lobby_window.update_menu_states()
-                logging.info(f"created room with code: {connected_room_code} and password: {connected_room_password}")
+                client_msg.info(f"created room with code: {connected_room_code} and password: {connected_room_password}")
                 lobby_window.display_message(f"Room created with code: {connected_room_code} \nPassword: {connected_room_password}")    
             elif message.command == "ROOM_JOINED":
                 with lock:
@@ -101,7 +107,7 @@ def main():
                     lobby_window.set_connected_room_password(connected_room_password)
 
                 lobby_window.update_menu_states()
-                logging.info(f"Joined room with code: {connected_room_code} and password: {connected_room_password}")
+                client_msg.info(f"Joined room with code: {connected_room_code} and password: {connected_room_password}")
                 lobby_window.display_message(f"Joined room with code: {connected_room_code} \nPassword: {connected_room_password}")
             elif message.command == "ROOM_NOT_FOUND":
                 lobby_window.display_message("Room not found.")

@@ -14,25 +14,20 @@ import io
 import base64
 import logging
 import threading
-from network import send_message
-from screen_share import capture_and_send_screen
-import re
 class LobbyWindow:
-    def __init__(self, root, userinfo, client, client_udp, server_udp_addr, member_id, shutdown_flag, connected_room_code= None, connected_room_password= None, in_chat= False):
+    def __init__(self, root, userinfo, client, client_udp, server_udp_addr, connected_room_code, connected_room_password, IN_CHAT ):
         self.root = root
         self.client = client
         self.userinfo = userinfo
         self.client_udp = client_udp
         self.server_udp_addr = server_udp_addr
-        self.member_id = member_id
         self.connected_room_code = connected_room_code
         self.connected_room_password = connected_room_password
-        self.in_chat = in_chat
+        self.IN_CHAT = IN_CHAT
         self.username = userinfo["username"]
         self.email = userinfo["email"]
         self.root.title("Lobby")
         self.root.geometry("500x400")
-        self.shutdown_flag = shutdown_flag
 
         # Create a Notebook (tabbed interface)
         self.notebook = ttk.Notebook(root)
@@ -97,19 +92,6 @@ class LobbyWindow:
         self.screen_canvas.bind("<Configure>", self.on_canvas_resize)
         self.last_screen_image = None
 
-        self.room_members_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.room_members_tab, text="Room Members")
-
-        self.refresh_button = tk.Button(self.room_members_tab, text="Refresh", command=self.refresh_members)
-        self.refresh_button.pack(pady=10)
-
-        # Frame to hold member labels and kick buttons
-        self.members_frame = tk.Frame(self.room_members_tab)
-        self.members_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        # Update room members initially
-        self.refresh_members()
-
         # Add a new menu for screen sharing
         self.screen_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.menu_bar.add_cascade(label="Screen Share", menu=self.screen_menu)
@@ -134,30 +116,6 @@ class LobbyWindow:
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-    def refresh_members(self):
-        """Refresh the list of members in the room."""
-        if not self.connected_room_code:
-            return
-
-        # Clear the existing member labels and buttons
-        """for widget in self.members_frame.winfo_children():
-            widget.destroy()"""
-
-        # Request the room status from the server
-       # self.client.send(Protocol("ROOM_STATUS", self.userinfo, {}).to_str().encode('utf-8'))
-
-    def set_connected_room_code(self, room_code):
-        self.connected_room_code = room_code
-        self.update_menu_states()
-    def set_connected_room_password(self, room_pwd):
-        self.connected_room_password = room_pwd
-        self.update_menu_states()
-    def set_in_chat(self, in_chat):
-        self.in_chat = in_chat
-        self.update_menu_states()
-    def set_username(self, username):
-        self.username = username
-        self.update_menu_states()
 
     def on_canvas_resize(self, event):
         """Handle canvas resizing."""
@@ -187,14 +145,14 @@ class LobbyWindow:
 
     def stop_screen_share(self):
         """Stop screen sharing."""
-        if not self.is_sharing_screen:
+        """if not self.is_sharing_screen:
             messagebox.showinfo("Info", "Screen sharing is not active.")
             return
 
-        self.is_sharing_screen = False
+        self.is_sharing_screen = False"""
         self.client.send(Protocol("STOP_SCREEN_SHARE", self.userinfo, {}).to_str().encode('utf-8'))
 
-        self.sharing_label.pack_forget()  # Hide the flashing red label
+        #self.sharing_label.pack_forget()  # Hide the flashing red label
 
     def flash_sharing_label(self):
         """Flash the sharing label red."""
@@ -208,7 +166,7 @@ class LobbyWindow:
         """Start screen sharing after receiving approval from the server."""
         if not self.is_sharing_screen:
             self.is_sharing_screen = True
-            threading.Thread(target=self.capture_and_send_share_screen, daemon=True).start()
+            threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
             #threading.Thread(target=self.capture_and_send_sound, daemon=True).start()
 
     def capture_and_send_sound(self):
@@ -225,15 +183,63 @@ class LobbyWindow:
         # Implement sound capture logic here
         # This could involve using a library like pyaudio to capture audio from the microphone
         # Return the captured sound data as bytes or Base64-encoded string
-    def capture_and_send_share_screen(self):
+    def split_and_send_screen(self, frame_id, img_bytes):
+        global server_udp_addr, client_udp
+        total_chunks = (len(img_bytes) // PACKET_SIZE) + 1
+        for chunk_id in range(total_chunks):
+            chunk = img_bytes[chunk_id * PACKET_SIZE : (chunk_id + 1) * PACKET_SIZE]
+            packet = Protocol("SCREEN_DATA_CHUNK", self.userinfo, {"frame_id": frame_id, "total_chunks": total_chunks, "chunk_id": chunk_id, "chunk": chunk}).to_str().encode('utf-8')
+            client_udp.sendto(packet, server_udp_addr)
+
+        
+
+
+
+    def capture_and_send_screen(self):
+        """Capture the screen and send it to the server."""
         frame_id = 0
         while self.is_sharing_screen:
-            frame_id += 1
-            capture_and_send_screen(frame_id, self.client_udp, self.server_udp_addr, self.userinfo)
-            # Add a small delay to avoid overloading the network
-            threading.Event().wait(0.02)  # Wait for 0.5 seconds
-        self.client_udp.sendto(Protocol("STOP_SHARE", self.userinfo, {}).to_str().encode('utf-8'), self.server_udp_addr)
-    
+            print("Sharing screen")
+            try:
+                frame_id += 1
+                # Capture the screen
+                screenshot = pyautogui.screenshot()
+
+                # Resize the screenshot
+                try:
+                    # For Pillow >= 10.0.0
+                    resampling_filter = Image.Resampling.LANCZOS
+                except AttributeError:
+                    # For Pillow < 10.0.0
+                    resampling_filter = Image.ANTIALIAS
+
+                screenshot = screenshot.resize((800, 600), resampling_filter)  # Resize to 800x600
+
+                # Convert the screenshot to bytes
+                img_byte_arr = io.BytesIO()
+                screenshot.save(img_byte_arr, format='JPEG', quality=50)  # Lower quality
+                img_byte_arr = img_byte_arr.getvalue()
+
+                # Encode the image data as Base64
+                img_base64 = base64.b64encode(img_byte_arr).decode('utf-8')
+
+                # Capture sound if sound sharing is enabled
+                
+                # Send the screen data (and sound data if applicable) to the server
+                """self.client.sendall(Protocol("SCREEN_DATA", username, {
+                    "image_data": img_base64,
+                }).to_str().encode('utf-8'))
+                """
+                self.split_and_send_screen(frame_id, img_base64)
+                # Send the screen data to the server
+                #self.client.sendall(Protocol("SCREEN_DATA", username, {"image_data": img_base64}).to_str().encode('utf-8'))
+
+                # Add a small delay to avoid overloading the network
+                threading.Event().wait(0.04)  # Wait for 0.5 seconds
+            except Exception as e:
+                logging.error(f"Error capturing or sending screen: {e}")
+                raise(e)
+                break
 
     def handle_message(self, message, lobby_window, chat_window, chat_root):
         # ... (existing code)
@@ -305,42 +311,7 @@ class LobbyWindow:
         # This could involve using a library like pyaudio to play the sound
         print("Playing sound data")
         pass
-
-    def update_members_list(self, host, members):
-        """Update the list of members in the Room Members tab."""
-        # Clear the existing member labels and buttons
-        print(members)
-        for widget in self.members_frame.winfo_children():
-            widget.destroy()
-        host_id = host["id"]
-        host_name = host["name"]
-        host_email = host["email"]
-        # Display the host
-        host_label = tk.Label(self.members_frame, text=f"Host: \nid: {host_id} - {host_name} - {host_email}", anchor="w")
-        host_label.pack(fill=tk.X, pady=5)
-
-        members_label = tk.Label(self.members_frame, text=f"Members:\n", anchor="w")
-        members_label.pack(fill=tk.X, pady=5)
-        # Display each member with a "Kick" button
-        for member in members:
-            member_frame = tk.Frame(self.members_frame)
-            member_frame.pack(fill=tk.X, pady=2)
-            member_id = member["id"]
-            member_name = member["name"]
-            member_email = member["email"]
-            member_label = tk.Label(member_frame, text=f"id: {member_id} - {member_name} - {member_email}", anchor="w")
-            member_label.pack(side=tk.LEFT, padx=5)
-
-            if host["id"] == self.member_id and member["id"] != self.member_id:
-                kick_button = tk.Button(member_frame, text="Kick", command=lambda m=member_id: self.kick_member(m))
-                kick_button.pack(side=tk.RIGHT, padx=5)
-    def kick_member(self, member_id: str):
-        """Kick a member from the room."""
-        if not self.connected_room_code:
-            messagebox.showinfo("Info", "You are not in a room.")
-            return
-
-        self.client.send(Protocol("KICK_MEMBER", self.userinfo, {"username": member_id}).to_str().encode('utf-8'))
+    
 
 
     def update_menu_states(self):
@@ -360,7 +331,7 @@ class LobbyWindow:
             self.room_menu.entryconfig("Check Room Status", state=tk.DISABLED)
             self.status_label.config(text="Not in a room", fg="red")
 
-        if self.in_chat:
+        if self.IN_CHAT:
             self.chat_menu.entryconfig("Enter Chat", state=tk.DISABLED)
             self.chat_menu.entryconfig("Exit Chat", state=tk.NORMAL)
         else:
@@ -415,13 +386,13 @@ class LobbyWindow:
         if not self.connected_room_code:
             messagebox.showinfo("Info", "You are not in a room.")
             return
-        if self.in_chat:
+        if self.IN_CHAT:
             messagebox.showinfo("Info", "You are already in the chat.")
             return
         self.client.send(Protocol("ENTER_CHAT", self.userinfo, {}).to_str().encode('utf-8'))
 
     def exit_chat(self):
-        if not self.in_chat:
+        if not self.IN_CHAT:
             messagebox.showinfo("Info", "You are not in the chat.")
             return
         self.client.send(Protocol("LEAVE_CHAT", self.userinfo, {}).to_str().encode('utf-8'))
@@ -438,16 +409,13 @@ class LobbyWindow:
         if self.connected_room_code:
             self.leave_room()
         self.client.send(Protocol("DISCONNECT", self.userinfo, {}).to_str().encode('utf-8'))
-        self.shutdown_flag.set()
         self.root.destroy()
 
 class ChatWindow:
-    def __init__(self, root, userinfo, client, in_chat= False, connected_room_code= None):
+    def __init__(self, root, userinfo, client):
         self.root = root
         self.client = client
         self.userinfo = userinfo
-        self.in_chat = in_chat
-        self.connected_room_code = connected_room_code
         self.root.title("Chat")
         self.root.geometry("600x400")
 
@@ -462,15 +430,11 @@ class ChatWindow:
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-    def set_in_chat(self, in_chat):
-        self.in_chat = in_chat
-    def set_connected_room_code(self, room_code):
-        self.connected_room_code = room_code
 
     def send_message(self, event=None):
         message = self.entry_field.get()
         if message:
-            send_message(self.client, message, self.userinfo, self.connected_room_code)
+            send_message(self.client, message)
             self.entry_field.delete(0, tk.END)
 
     def display_message(self, message):
@@ -482,39 +446,6 @@ class ChatWindow:
 
     def on_close(self):
         """Handle window close event."""
-        if self.in_chat:
+        if self.IN_CHAT:
             self.client.send(Protocol("LEAVE_CHAT", self.userinfo, {}).to_str().encode('utf-8'))
         self.root.withdraw()  # Hide the chat window instead of destroying it
-
-def get_user_info(root):
-    while True:
-        user_name = simpledialog.askstring("Username", "Enter your username:", parent=root)
-        val = True
-        if not user_name:
-            messagebox.showerror("Error", "Username is required.")
-            val = False
-            continue
-        if len(user_name) > 20:
-            messagebox.showerror("Error", "Username is too long.")
-        if len(user_name) < 2:
-            messagebox.showerror("Error", "Username is too short.")
-        if val:
-            break
-    while True:
-        email = simpledialog.askstring("Email", "Enter your email:", parent=root)
-        val = True
-        if not email:
-            messagebox.showerror("Error", "Email is required.") 
-            val = False
-            continue
-        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_regex, email):
-            messagebox.showerror("Error", "Invalid email format.")
-        elif len(email) > 50:
-            messagebox.showerror("Error", "Email is too long.")
-        elif len(email) < 5:
-            messagebox.showerror("Error", "Email is too short.")
-        if val:
-            break
-    userinfo = {"username": user_name, "email": email}
-    return userinfo

@@ -220,6 +220,7 @@ class LobbyWindow:
         for chunk_id in range(total_chunks):
             chunk = img_bytes[chunk_id * PACKET_SIZE : (chunk_id + 1) * PACKET_SIZE]
             packet = Protocol("SCREEN_DATA_CHUNK", self.userinfo, {"frame_id": frame_id, "total_chunks": total_chunks, "chunk_id": chunk_id, "chunk": chunk}).to_str().encode('utf-8')
+            logging.info(f"Sending chunk {chunk_id} / {total_chunks} of frame {frame_id} to {server_udp_addr}")
             client_udp.sendto(packet, server_udp_addr)
 
         
@@ -487,23 +488,31 @@ def connect_to_server():
         client_tcp.connect((SERVER_HOST, SERVER_PORT))
 
 
-        udp_server_port = Protocol.from_str(client_tcp.recv(1024).decode('utf-8')).data["udp_port"]
-        server_udp_addr = (SERVER_HOST, udp_server_port) 
-        print(f"Received server's UDP port: {udp_server_port}")
-        client_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        client_udp.bind(('0.0.0.0', 0)) # Bind to any available port
-        client_udp_port = client_udp.getsockname()[1]  # Get the assigned port
-        
-        print(f"UDP socket is ready on port {client_udp_port}")
-        client_tcp.send(Protocol("UDP_PORT", userinfo, {"udp_port": client_udp_port}).to_str().encode('utf-8'))
-        ACK1 = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))  # Wait for the server to acknowledge the UDP port
-        print(f"Received ACK1: {ACK1}")
-        ACK2, addr = client_udp.recvfrom(1024)
-        ACK2 = ACK2.decode('utf-8')
-        print(f"Received ACK2: {ACK2} from {addr}")
-        client_udp.sendto("CONNECTED".encode('utf-8'), server_udp_addr)
-        logging.info("Connected to the server.")
-        return client_tcp, client_udp, server_udp_addr
+        udp_port_msg = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))
+        if udp_port_msg.command == "UDP_PORT":
+            udp_server_port = udp_port_msg.data["udp_port"]
+            server_udp_addr = (SERVER_HOST, udp_server_port) 
+            client_tcp.send(Protocol("GOT_UDP_PORT", userinfo, {}).to_str().encode('utf-8'))
+            print(f"Received server's UDP port: {udp_port_msg}")
+
+            ack_msg = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))
+            if ack_msg.command == "ACK":
+
+                client_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                client_udp.bind(('0.0.0.0', 0)) # Bind to any available port
+                client_udp_port = client_udp.getsockname()[1]  # Get the assigned port
+                print(f"UDP socket is ready on port {client_udp_port}")
+                client_tcp.send(Protocol("UDP_PORT", userinfo, {"udp_port": client_udp_port}).to_str().encode('utf-8'))
+                got_udp_port_msg = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))
+                if got_udp_port_msg.command == "GOT_UDP_PORT":
+                    client_tcp.send(Protocol("ACK", userinfo, {}).to_str().encode('utf-8'))
+                    conn_established_msg = Protocol.from_str(client_tcp.recv(1024).decode('utf-8'))
+                    logging.info("Connected to the server.")
+                    return client_tcp, client_udp, server_udp_addr
+            else:
+                raise Exception(f"Expected ACK message, but received: {ack_msg}")
+        else:
+            raise Exception(f"Expected UDP_PORT message, but received: {udp_port_msg}")
     except Exception as e:
         logging.error(f"Failed to connect to the server: {e}")
         messagebox.showerror("Error", f"Failed to connect to the server: {e}")

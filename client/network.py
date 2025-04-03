@@ -10,24 +10,31 @@ parent_dir = os.path.abspath(os.path.join(child_dir, '..'))
 sys.path.append(parent_dir)
 from protocol import Protocol
 import constants
+import select
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename=r'C:\Users\ort\Documents\cyberProject\client_network.log',  # Log to a file
-    filemode='w'  # Append mode
+    filename=r'D:\or\cyberProject\client_network.log',  # Log to a file
+    filemode='w+'  # Append mode
 )
 client_udp_msg = logging.getLogger('client_udp_msg')
 client_udp_msg.setLevel(logging.INFO)
-client_udp_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\client_udp_msg.log')
+client_udp_handler = logging.FileHandler(r'D:\or\cyberProject\client_udp_msg.log')
 client_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_udp_msg.addHandler(client_udp_handler)
 
 client_recived_udp_msg = logging.getLogger('client_recived_udp_msg')
 client_recived_udp_msg.setLevel(logging.INFO)
-client_recived_udp_handler = logging.FileHandler(r'C:\Users\ort\Documents\cyberProject\client_recived_udp_msg.log')
+client_recived_udp_handler = logging.FileHandler(r'D:\or\cyberProject\client_recived_udp_msg.log')
 client_recived_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_recived_udp_msg.addHandler(client_recived_udp_handler)
+
+client_tcp_msg = logging.getLogger('client_tcp_msg')
+client_tcp_msg.setLevel(logging.INFO)
+client_tcp_handler = logging.FileHandler(r'D:\or\cyberProject\client_tcp_msg.log')
+client_tcp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+client_tcp_msg.addHandler(client_tcp_handler)
 
 
 
@@ -71,21 +78,33 @@ def connect_to_server(userinfo):
         raise e
         return None
 
-def listen_for_messages(client, message_queue):
+def listen_for_messages(client, message_queue, shutdown_flag):
     """Listen for incoming messages from the server and add them to the queue."""
-    while True:
+    while not shutdown_flag.is_set():
         try:
+            ready_to_read, _, _ = select.select([client], [], [], 1)  # Add a timeout
+            if not ready_to_read:
+                continue  # Skip if no data is available
             data = b""
             while True:
                 part = client.recv(constants.BUFFER_SIZE)
                 data += part
                 if len(part) < constants.BUFFER_SIZE:
                     break
-            message = Protocol.from_str(data.decode('utf-8'))
-            message_queue.put(message)
+            a = data.decode('utf-8').split("\n")
+            for m in a:
+                if not m:
+                    continue
+                message = Protocol.from_str(m)
+                if message.command == "SCREEN_SHARE_STOPPED":
+                    client_udp_msg.info(f"Received message from {message.sender} : {message}")
+                message_queue.put(message)
+                
+            
+            print(f"Received message from {message.sender} : {message}")
+            client_tcp_msg.info(f"Received message from {message.sender} : {message}")
         except Exception as e:
-            logging.error(f"Error receiving message: {e}")
-            break
+            client_tcp_msg.error(f"Error receiving message: {e}")
 
 def listen_for_udp_messages(client_udp, server_udp_addr, message_queue):
     """Listen for incoming UDP messages from the server."""
@@ -115,8 +134,14 @@ def listen_for_udp_messages(client_udp, server_udp_addr, message_queue):
                             message_queue.put(Protocol("SCREEN_DATA", packet.sender, {"image_data": image_data}))
                             client_udp_msg.info(f"frame {current_frame_id} finished")
                             buffer.clear()
+                    elif packet.command == "RESET_FRAME":
+                        #message_queue.put(packet)
+                        current_frame_id = 1
+                        buffer.clear()
+                        client_udp_msg.info(f"Received message from (STOP) {packet.sender} : {packet}")
         except Exception as e:
-            logging.error(f"Error receiving UDP message: {e}")
+            client_udp_msg.error(f"Error receiving UDP message: {e}")
+            print(f"Error receiving UDP message: {e}")
             break
 
 def send_message(client, message, userinfo, connected_room_code):
