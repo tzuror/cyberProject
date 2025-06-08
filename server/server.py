@@ -35,20 +35,20 @@ clients = set()
 # Additional logger for chat messages
 chat_logger = logging.getLogger('chat_logger')
 chat_logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(r'D:\or\cyberProject\chat_messages.log')
+file_handler = logging.FileHandler(r'D:\or\cyberProject\chat_messages.log', mode='w')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 chat_logger.addHandler(file_handler)
 
 # Additional logger for all traffic (requests & responses)
 traffic_logger = logging.getLogger('traffic_logger')
 traffic_logger.setLevel(logging.INFO)
-traffic_handler = logging.FileHandler(r'D:\or\cyberProject\server_traffic.log')
+traffic_handler = logging.FileHandler(r'D:\or\cyberProject\server_traffic.log', mode='w')
 traffic_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 traffic_logger.addHandler(traffic_handler)
 
 server_udp_msg = logging.getLogger('server_udp_msg')
 server_udp_msg.setLevel(logging.INFO)
-server_udp_handler = logging.FileHandler(r'D:\or\cyberProject\server_udp_msg.log')
+server_udp_handler = logging.FileHandler(r'D:\or\cyberProject\server_udp_msg.log', mode='w')
 server_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 server_udp_msg.addHandler(server_udp_handler)
 message_queue = queue.Queue()
@@ -90,9 +90,13 @@ def broadcast_message(room_code, message):
 
 def broadcast_UDP(room_code, message):
     if room_code in rooms.keys():
-        for member in rooms[room_code].get_members():
-            send_udp(server_udp_socket, member.get_udp_address(), message.to_str().encode('utf-8'))
-            traffic_logger.info(f"SENT to {member.get_tcp_address()}: {message}")
+        try:
+            for member in rooms[room_code].get_members():
+                send_udp(server_udp_socket, member.get_udp_address(), message.to_str().encode('utf-8'))
+                traffic_logger.info(f"SENT to {member.get_tcp_address()}: {message}")
+        except RuntimeError as e:
+            logging.error(f"Error broadcasting UDP message: {e}. Retrying...")
+            broadcast_UDP(room_code, message)  # Retry broadcasting
     else:
         logging.error(f"Room {room_code} not found.")
 
@@ -341,20 +345,6 @@ def process_messages():
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
                     logging.error(f"{message.sender['username']} tried to send screen data in room {room_code} but the room was not found.")
-            elif command == "SOUND_DATA":
-                room_code = client.get_room_code()
-                if room_code in rooms.keys():
-                    if rooms[room_code].get_sharing() == client:
-                        for member in rooms[room_code].get_members():
-                            with lock:
-                                member.send(Protocol("SOUND_DATA", message.sender["username"], message.data).to_str().encode('utf-8'))
-                                traffic_logger.info(f"SENT to {member.get_tcp_address()}: SHARE_SOUND")
-                    else:
-                        send(client_socket, Protocol("ERROR", "server", {"message": "You are not sharing your screen."}).to_str().encode('utf-8'))
-                        logging.error(f"{message.sender['username']} tried to share sound in room {room_code} but they are not sharing their screen.")
-                else:
-                    send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
-                    logging.error(f"{message.sender['username']} tried to share sound in room {room_code} but the room was not found.")
             else:
                 send(client_socket, Protocol("ERROR", "server", {"message": "Invalid command."}).to_str().encode('utf-8'))
                 logging.error(f"Invalid command: {command}")
@@ -396,9 +386,15 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
 
             # Add the message to the queue for processing
                 message_queue.put((client, message))
+        except ConnectionAbortedError:
+            logging.warning(f"Connection reset by {client_address}. Client may have disconnected.")
+            break
+        except OSError:
+            logging.warning(f"Socket error with {client_address}. Client may have disconnected.")
+            break
         except Exception as e:
             logging.error(f"Error handling client: {e}")
-            #raise(e)
+            raise e
     try:        
         disconnect_client(client_socket, client_address, client)
     except Exception as e:
@@ -410,52 +406,6 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
             pass
             
 
-
-
-"""def handle_client(client_socket, client_address, client_udp_address, client: MEMBER):
-    logging.info(f"New connection from {client_address}, UDP address: {client_udp_address}")
-
-    while True:
-        try:
-            data = b""
-            while True:
-                part = client_socket.recv(BUFFER_SIZE)
-                data += part
-                if len(part) < BUFFER_SIZE:
-                    break
-            message = Protocol.from_str(data.decode('utf-8'))
-            if not message:
-                break
-            traffic_logger.info(f"RECEIVED from {client_address}: {message.to_str()}")
-            
-
-
-    try:        
-        room_code = client.get_room_code()
-        if client in clients:
-            if room_code in rooms.keys() and room_code != None:
-                if rooms[room_code].get_host() == client:
-                    rooms[room_code].set_host(None)
-                    rooms[room_code].remove_member(client)
-                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
-                elif client in rooms[room_code].get_members():
-                    rooms[room_code].remove_member(client)
-                    broadcast_message(room_code, Protocol("USER_LEFT", "server", {"username": message.sender}))
-                if rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) == 0:
-                    print("room deleted")
-                    del rooms[room_code]
-                    rooms.pop(room_code, None)
-                elif rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) > 0:
-                    new_host = list(rooms[room_code].get_members())[0]
-                    rooms[room_code].set_host(new_host)
-                    broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}).to_str().encode('utf-8'))
-            clients.remove(client)
-            del client
-        logging.info(f"Client {client_address} disconnected")
-    except Exception as e:
-        logging.error(f"Error handling client disconnection: {e}")
-    finally:
-        client_socket.close()"""
         
 def handle_udp(server_udp_socket):
     while True:
