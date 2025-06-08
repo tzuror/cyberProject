@@ -15,24 +15,25 @@ import select
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename=r'D:\or\cyberProject\client_network.log',  # Log to a file
-    filemode='w+'  # Append mode
+    filename=r'client_network.log',  # Log to a file
+    filemode='w'  
 )
 client_udp_msg = logging.getLogger('client_udp_msg')
 client_udp_msg.setLevel(logging.INFO)
-client_udp_handler = logging.FileHandler(r'D:\or\cyberProject\client_udp_msg.log')
+
+client_udp_handler = logging.FileHandler(r'client_udp_msg.log', mode='w')
 client_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_udp_msg.addHandler(client_udp_handler)
 
 client_recived_udp_msg = logging.getLogger('client_recived_udp_msg')
 client_recived_udp_msg.setLevel(logging.INFO)
-client_recived_udp_handler = logging.FileHandler(r'D:\or\cyberProject\client_recived_udp_msg.log')
+client_recived_udp_handler = logging.FileHandler(r'client_recived_udp_msg.log', mode='w')
 client_recived_udp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_recived_udp_msg.addHandler(client_recived_udp_handler)
 
 client_tcp_msg = logging.getLogger('client_tcp_msg')
 client_tcp_msg.setLevel(logging.INFO)
-client_tcp_handler = logging.FileHandler(r'D:\or\cyberProject\client_tcp_msg.log')
+client_tcp_handler = logging.FileHandler(r'client_tcp_msg.log', mode='w')
 client_tcp_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_tcp_msg.addHandler(client_tcp_handler)
 
@@ -126,8 +127,11 @@ def listen_for_udp_messages(client_udp, server_udp_addr, message_queue):
                             buffer.clear()
                             current_frame_id = packet.data["frame_id"]
                             buffer[packet.data["chunk_id"]] = packet.data["chunk"]
+                            client_udp_msg.info(f"Received new frame {current_frame_id} from {packet.sender}, chunk {packet.data['chunk_id']} / {packet.data['total_chunks']}")
                             logging.info(f"Received frame {current_frame_id} from {packet.sender} ")
                         elif packet.data["frame_id"] < current_frame_id:
+                            logging.info(f"Received old frame {packet.data['frame_id']} from {packet.sender}, current frame is {current_frame_id}")
+                            client_udp_msg.info(f"Received old frame {packet.data['frame_id']} from {packet.sender}, current frame is {current_frame_id}")
                             continue
                         if len(buffer) == packet.data["total_chunks"]:
                             image_data = "".join(buffer.values())

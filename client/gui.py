@@ -17,6 +17,7 @@ import threading
 from network import send_message
 from screen_share import capture_and_send_screen
 import re
+import tkinter.filedialog
 class LobbyWindow:
     def __init__(self, root, userinfo, client, client_udp, server_udp_addr, member_id, shutdown_flag, connected_room_code= None, connected_room_password= None, in_chat= False):
         self.root = root
@@ -42,13 +43,18 @@ class LobbyWindow:
         self.lobby_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.lobby_tab, text="Lobby")
 
+        # Configure grid layout for the lobby tab
+        self.lobby_tab.grid_rowconfigure(0, weight=1)  # Chat area row
+        self.lobby_tab.grid_rowconfigure(1, weight=0)  # Status label row
+        self.lobby_tab.grid_columnconfigure(0, weight=1)
+
         # Chat area for lobby messages
         self.chat_area = scrolledtext.ScrolledText(self.lobby_tab, state='disabled')
-        self.chat_area.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.chat_area.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
         # Status label
         self.status_label = tk.Label(self.lobby_tab, text="Not in a room", fg="red")
-        self.status_label.pack(pady=10)
+        self.status_label.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
 
         # Tab 2: User Profile
         self.profile_tab = ttk.Frame(self.notebook)
@@ -119,15 +125,15 @@ class LobbyWindow:
         # Flag to track screen sharing state
         self.is_sharing_screen = False
 
-        self.sound_share_var = tk.BooleanVar()
+        """self.sound_share_var = tk.BooleanVar()
         self.sound_share_checkbox = tk.Checkbutton(self.screen_menu, text="Share Sound", variable=self.sound_share_var)
-        self.screen_menu.add_checkbutton(label="Share Sound", variable=self.sound_share_var)
+        self.screen_menu.add_checkbutton(label="Share Sound", variable=self.sound_share_var)"""
 
 
         # Flashing red label for screen sharing status
-        self.sharing_label = tk.Label(self.lobby_tab, text="Sharing Screen", fg="red")
-        self.sharing_label.pack(pady=10)
-        self.sharing_label.pack_forget()  # Hide initially
+        self.sharing_label = tk.Label(self.lobby_tab, text="●", fg="red", font=("Arial", 14, "bold"))  # Small red dot
+        self.sharing_label.place(relx=0.95, rely=0.95, anchor="se")  # Position at the bottom-right corner
+        self.sharing_label.place_forget()  # Hide initially
 
         # Update menu states initially
         self.update_menu_states()
@@ -144,7 +150,7 @@ class LobbyWindow:
             widget.destroy()"""
 
         # Request the room status from the server
-       # self.client.send(Protocol("ROOM_STATUS", self.userinfo, {}).to_str().encode('utf-8'))
+        self.client.send(Protocol("ROOM_STATUS", self.userinfo, {}).to_str().encode('utf-8'))
 
     def set_connected_room_code(self, room_code):
         self.connected_room_code = room_code
@@ -174,7 +180,7 @@ class LobbyWindow:
             messagebox.showinfo("Info", "Screen sharing is already active.")
             return
 
-        share_sound = self.sound_share_var.get()
+        #share_sound = self.sound_share_var.get()
 
         self.client.send(Protocol("START_SCREEN_SHARE", self.userinfo, {}).to_str().encode('utf-8'))
         #self.is_sharing_screen = True
@@ -182,7 +188,7 @@ class LobbyWindow:
         #threading.Thread(target=self.capture_and_send_screen, daemon=True).start()
 
         # Show the flashing red label
-        self.sharing_label.pack(pady=10)
+        self.sharing_label.place(relx=0.95, rely=0.95, anchor="se")
         self.flash_sharing_label()
 
     def stop_screen_share(self):
@@ -193,8 +199,8 @@ class LobbyWindow:
 
         self.is_sharing_screen = False
         self.client.send(Protocol("STOP_SCREEN_SHARE", self.userinfo, {}).to_str().encode('utf-8'))
-
-        self.sharing_label.pack_forget()  # Hide the flashing red label
+        self.client_udp.sendto(Protocol("STOP_SHARE", self.userinfo, {}).to_str().encode('utf-8'), self.server_udp_addr)
+        self.sharing_label.place_forget()  # Hide the flashing red label
 
     def flash_sharing_label(self):
         """Flash the sharing label red."""
@@ -211,27 +217,13 @@ class LobbyWindow:
             threading.Thread(target=self.capture_and_send_share_screen, daemon=True).start()
             #threading.Thread(target=self.capture_and_send_sound, daemon=True).start()
 
-    def capture_and_send_sound(self):
-        """Capture sound data."""
-        while self.is_sharing_screen:
-            if self.sound_share_var.get():
-                # Implement sound capture logic here
-                # This could involve using a library like pyaudio to capture audio from the microphone
-                # Return the captured sound data as bytes or Base64-encoded string
-                sound_data = "Sound data"
-                self.client.sendall(Protocol("SOUND_DATA", self.userinfo, {"sound_data": sound_data}).to_str().encode('utf-8'))
-            threading.Event().wait(1)
-
-        # Implement sound capture logic here
-        # This could involve using a library like pyaudio to capture audio from the microphone
-        # Return the captured sound data as bytes or Base64-encoded string
     def capture_and_send_share_screen(self):
         frame_id = 0
         while self.is_sharing_screen:
             frame_id += 1
             capture_and_send_screen(frame_id, self.client_udp, self.server_udp_addr, self.userinfo)
             # Add a small delay to avoid overloading the network
-            threading.Event().wait(0.02)  # Wait for 0.5 seconds
+            threading.Event().wait(0.05)  # Wait for 0.5 seconds
         self.client_udp.sendto(Protocol("STOP_SHARE", self.userinfo, {}).to_str().encode('utf-8'), self.server_udp_addr)
     
 
@@ -451,14 +443,25 @@ class ChatWindow:
         self.root.title("Chat")
         self.root.geometry("600x400")
 
+        self.main_frame = tk.Frame(root)
+
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_frame.grid_rowconfigure(0, weight=1)  # Chat area row
+        self.main_frame.grid_rowconfigure(1, weight=0)  # Entry field row
+        self.main_frame.grid_columnconfigure(0, weight=1)
         # Chat area
-        self.chat_area = scrolledtext.ScrolledText(root, state='disabled')
-        self.chat_area.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.chat_area = scrolledtext.ScrolledText(self.main_frame, state='disabled')
+        #self.chat_area.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.chat_area.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
         # Message entry field
-        self.entry_field = tk.Entry(root)
-        self.entry_field.pack(padx=10, pady=10, fill=tk.X)
+        self.entry_field = tk.Entry(self.main_frame)
+        self.entry_field.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        #self.entry_field.pack(padx=10, pady=10, fill=tk.X)
         self.entry_field.bind("<Return>", self.send_message)
+
+        self.send_file_button = tk.Button(self.main_frame, text="Send File")
+        self.send_file_button.grid(row=1, column=1, padx=10, pady=10, sticky="e")
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)

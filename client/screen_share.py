@@ -8,14 +8,21 @@ from protocol import Protocol
 import constants
 
 
-
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename=r'screen_share.log',  # Log to a file
+    filemode='w'  
+)
 def split_and_send_screen(server_udp_addr, client_udp, userinfo, frame_id, img_bytes):
     """Split the screen data into chunks and send them to the server."""
     total_chunks = (len(img_bytes) // constants.PACKET_SIZE) + 1
     for chunk_id in range(total_chunks):
         chunk = img_bytes[chunk_id * constants.PACKET_SIZE : (chunk_id + 1) * constants.PACKET_SIZE]
+        #print(chunk_id,total_chunks, frame_id)
         packet = Protocol("SCREEN_DATA_CHUNK", userinfo, {"frame_id": frame_id, "total_chunks": total_chunks, "chunk_id": chunk_id, "chunk": chunk}).to_str().encode('utf-8')
         client_udp.sendto(packet, server_udp_addr)
+    
 
         
 

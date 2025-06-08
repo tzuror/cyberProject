@@ -11,12 +11,12 @@ import constants
 logging.basicConfig(
     level= logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename=r'D:\or\cyberProject\client.log',  # Log to a file
-    filemode='w+'  # ]replace mode
+    filename=r'client.log',  # Log to a file
+    filemode='w'  # ]replace mode
 )
 client_msg = logging.getLogger('client_msg')
 client_msg.setLevel(logging.INFO)
-client_handler = logging.FileHandler(r'D:\or\cyberProject\client_msg.log')
+client_handler = logging.FileHandler(r'client_msg.log', mode='w')
 client_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 client_msg.addHandler(client_handler)
 lock = threading.Lock()
