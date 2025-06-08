@@ -18,6 +18,7 @@ from network import send_message
 from screen_share import capture_and_send_screen
 import re
 import tkinter.filedialog
+import constants
 class LobbyWindow:
     def __init__(self, root, userinfo, client, client_udp, server_udp_addr, member_id, shutdown_flag, connected_room_code= None, connected_room_password= None, in_chat= False):
         self.root = root
@@ -460,7 +461,7 @@ class ChatWindow:
         #self.entry_field.pack(padx=10, pady=10, fill=tk.X)
         self.entry_field.bind("<Return>", self.send_message)
 
-        self.send_file_button = tk.Button(self.main_frame, text="Send File")
+        self.send_file_button = tk.Button(self.main_frame, text="Send File", command=self.send_file)
         self.send_file_button.grid(row=1, column=1, padx=10, pady=10, sticky="e")
 
         # Handle window close event
@@ -475,11 +476,83 @@ class ChatWindow:
         if message:
             send_message(self.client, message, self.userinfo, self.connected_room_code)
             self.entry_field.delete(0, tk.END)
+    
+    def send_file(self):
+        """Open file dialog and send selected file."""
+        if not self.connected_room_code:
+            messagebox.showinfo("Info", "You must be in a room to send files.")
+            return
+            
+        file_path = tkinter.filedialog.askopenfilename(
+            title="Select file to send",
+            filetypes=[("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            with open(file_path, 'rb') as file:
+                if os.path.getsize(file_path) > constants.MAX_FILE_SIZE:  # 10 MB max file size
+                    messagebox.showerror("Error", "File size exceeds the maximum limit of 10 MB.")
+                    return
+                if len(os.path.basename(file_path)) > constants.MAX_FILE_NAME_LENGTH:  # 255 characters max for file names
+                    messagebox.showerror("Error", "File name is too long. Maximum length is 255 characters.")
+                if not os.path.isfile(file_path):
+                    messagebox.showerror("Error", "Selected path is not a valid file.")
+                    return
+                # Read file data
+                file_data = file.read()
+                file_name = os.path.basename(file_path)
+                
+                # Split file into chunks if needed
+                chunk_size = 1024 * 50  # 50KB chunks
+                total_chunks = (len(file_data) // chunk_size) + 1
+                
+                # Send file metadata first
+                self.client.send(Protocol(
+                    "FILE_METADATA", 
+                    self.userinfo, 
+                    {
+                        "file_name": file_name,
+                        "file_size": len(file_data),
+                        "total_chunks": total_chunks
+                    }
+                ).to_str().encode('utf-8'))
+                
+                # Send file chunks
+                for chunk_id in range(total_chunks):
+                    chunk = file_data[chunk_id * chunk_size : (chunk_id + 1) * chunk_size]
+                    self.client.send(Protocol(
+                        "FILE_CHUNK",
+                        self.userinfo,
+                        {
+                            "file_name": file_name,
+                            "chunk_id": chunk_id,
+                            "chunk_data": base64.b64encode(chunk).decode('utf-8')
+                        }
+                    ).to_str().encode('utf-8'))
+                    
+                self.display_message(f"{self.userinfo["username "]}: sent the file '{file_name}'")
+                self.add_file_link_to_chat(file_name, file_path)
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to send file: {e}")  
 
     def display_message(self, message):
         """Display a message in the chat area."""
         self.chat_area.config(state='normal')
         self.chat_area.insert(tk.END, message + "\n")
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+    
+    def add_file_link_to_chat(self, file_name, file_path):
+        """Add a clickable link to the chat for the received file."""
+        self.chat_area.config(state='normal')
+        self.chat_area.insert(tk.END, f"File received: {file_name}\n")
+        self.chat_area.insert(tk.END, f"Click here to open: {file_path}\n", ("link",))
+        self.chat_area.tag_config("link", foreground="blue", underline=True)
+        self.chat_area.tag_bind("link", "<Button-1>", lambda e: os.startfile(file_path))
         self.chat_area.config(state='disabled')
         self.chat_area.yview(tk.END)
 

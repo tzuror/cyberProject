@@ -69,10 +69,10 @@ def send_udp(server_udp_socket, receiver_address, message):
 
 
 
-def send_chat_message(room_code, message, sender="server", toSender=True):
+def send_chat_message(room_code, message, sender_id = -1, sender="server", toSender=True):
     if room_code in rooms.keys():
-        for member in rooms[room_code].get_chat_members():
-            if sender == "server" or toSender or member != sender:
+        for member in rooms[room_code].get_members():
+            if toSender or (sender_id != -1 and member.get_id() != sender_id):
                 member.send(message.to_str().encode('utf-8'))
                 traffic_logger.info(f"SENT to {member.get_tcp_address()}: {message.to_str()}")
     else:
@@ -345,6 +345,43 @@ def process_messages():
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
                     logging.error(f"{message.sender['username']} tried to send screen data in room {room_code} but the room was not found.")
+            elif command == "FILE_METADATA":
+                room_code = client.get_room_code()
+                if room_code in rooms.keys():
+                    if client in rooms[room_code].get_chat_members():
+                        # Broadcast file metadata to all chat members
+                        send_chat_message(
+                            room_code,
+                            Protocol(
+                                "FILE_METADATA",
+                                message.sender["username"],
+                                message.data
+                            ), sender_id = client.get_id(),
+                            toSender=False
+                        )
+                    else:
+                        send(client_socket, Protocol("ERROR", "server", {"message": "You must be in the chat to send files."}).to_str().encode('utf-8'))
+                else:
+                    send(client_socket, Protocol("ERROR", "server", {"message": "You must be in a room to send files."}).to_str().encode('utf-8'))
+
+            elif command == "FILE_CHUNK":
+                room_code = client.get_room_code()
+                if room_code in rooms.keys():
+                    if client in rooms[room_code].get_chat_members():
+                        # Broadcast file chunk to all chat members
+                        send_chat_message(
+                            room_code,
+                            Protocol(
+                                "FILE_CHUNK",
+                                message.sender["username"],
+                                message.data
+                            ), sender_id = client.get_id(),
+                            toSender=False
+                        )
+                    else:
+                        send(client_socket, Protocol("ERROR", "server", {"message": "You must be in the chat to send files."}).to_str().encode('utf-8'))
+                else:
+                    send(client_socket, Protocol("ERROR", "server", {"message": "You must be in a room to send files."}).to_str().encode('utf-8'))
             else:
                 send(client_socket, Protocol("ERROR", "server", {"message": "Invalid command."}).to_str().encode('utf-8'))
                 logging.error(f"Invalid command: {command}")
@@ -352,7 +389,7 @@ def process_messages():
             logging.error(f"Error handling client: {e}")
             print(e)
             raise e
-            print(e) 
+         
 def is_socket_open(socket: socket.socket):
     try:
         # Check if the socket has a valid file descriptor
@@ -378,8 +415,7 @@ def handle_client(client_socket, client_address, client_udp_address, client: MEM
             a = "123"
             for mess in data.decode('utf-8').split("\n"):
                 if not mess or mess == "" :
-                    print(data.decode('utf-8').split("\n"))
-                    print("no message, disconnecting")
+                    # If the message is empty, skip it
                     continue
                 message = Protocol.from_str(mess)
                 traffic_logger.info(f"RECEIVED from {client_address}: {message.to_str()}")

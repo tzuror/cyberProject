@@ -101,8 +101,6 @@ def listen_for_messages(client, message_queue, shutdown_flag):
                     client_udp_msg.info(f"Received message from {message.sender} : {message}")
                 message_queue.put(message)
                 
-            
-            print(f"Received message from {message.sender} : {message}")
             client_tcp_msg.info(f"Received message from {message.sender} : {message}")
         except Exception as e:
             client_tcp_msg.error(f"Error receiving message: {e}")

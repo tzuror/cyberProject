@@ -3,3 +3,5 @@ BUFFER_SIZE = 1024   # 1 MB
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 12345
 CONNECTION_TIMEOUT = 10
+MAX_FILE_SIZE = 1024 * 1024 * 10  # 10 MB max file size
+MAX_FILE_NAME_LENGTH = 255  # Maximum length for file names

@@ -7,6 +7,9 @@ from screen_share import capture_and_send_screen, split_and_send_screen
 import logging
 from tkinter import messagebox
 import constants
+import base64
+import socket
+import tkinter.filedialog
 
 logging.basicConfig(
     level= logging.INFO,
@@ -14,6 +17,7 @@ logging.basicConfig(
     filename=r'client.log',  # Log to a file
     filemode='w'  # ]replace mode
 )
+current_file = None  # For tracking incoming file transfers
 client_msg = logging.getLogger('client_msg')
 client_msg.setLevel(logging.INFO)
 client_handler = logging.FileHandler(r'client_msg.log', mode='w')
@@ -167,6 +171,60 @@ def main():
                 #lobby_window.display_message(f"Host: {host}")
                 #lobby_window.display_message(f"Members: {members_str}")
                 lobby_window.update_members_list(host, members)
+            elif message.command == "FILE_METADATA":
+                # Show notification about incoming file
+                lobby_window.display_message(f"Receiving file: {message.data['file_name']} ({message.data['file_size']} bytes)")
+                
+                # Store file metadata for reconstruction
+                global current_file
+                current_file = {
+                    'name': message.data['file_name'],
+                    'size': message.data['file_size'],
+                    'total_chunks': message.data['total_chunks'],
+                    'received_chunks': 0,
+                    'data': []
+                }
+
+            elif message.command == "FILE_CHUNK":
+                if current_file and current_file['name'] == message.data['file_name']:
+                    # Add chunk to file data
+                    current_file['data'].append(base64.b64decode(message.data['chunk_data']))
+                    current_file['received_chunks'] += 1
+                    
+                    # Check if all chunks received
+                    if current_file['received_chunks'] == current_file['total_chunks']:
+                        # Save the complete file
+                        chat_window.display_message(f"{message.sender}: sent a file '{current_file['name']}'' ")
+                        # Ask user if he wants to recive the file in a tkinter window 
+                        accept_file = messagebox.askyesno(
+                            f"File Transfer",
+                            f"FILE SENT IN CHAT!\n{message.sender} sent the file '{current_file['name']}', \nDo you want to recive the file  ({current_file['size']} bytes)?"
+                        )
+
+                        if accept_file:
+                            file_path = tkinter.filedialog.asksaveasfilename(
+                                initialfile=current_file['name'],
+                                title="Save received file"
+                            )
+                            
+                            if file_path:
+                                try:
+                                    with open(file_path, 'wb') as file:
+                                        for chunk in current_file['data']:
+                                            file.write(chunk)
+                                    lobby_window.display_message(f"File saved: {current_file['name']}")
+                                    #chat_window.display_message(f"File saved: {current_file['name']}")
+                                    # add a link to the file in the chat window
+                                    chat_window.add_file_link_to_chat(current_file['name'], file_path)
+                                except Exception as e:
+                                    logging.error(f"Error saving file: {e}")
+                                    chat_window.display_message(f"server: Error saving file")
+                            else:
+                                chat_window.display_message(f"server: File transfer cancelled: {current_file['name']}")  
+                        # Reset current file
+                        else:
+                            lobby_window.display_message(f"File '{current_file['name']}' was declined.")
+                        current_file = None
             
         root.after(1, process_messages)  # Start processing messages
         root.mainloop()
