@@ -85,6 +85,7 @@ def main():
                     pass
                 lobby_window.display_message(message)
                 with lock:
+                    lobby_window.sharing_label.place_forget()
                     lobby_window.is_sharing_screen = False
             elif message.command == "USER_STOPPED_SCREEN_SHARE":
                 lobby_window.display_message(f"{message.data['username']} stopped screen sharing.")
@@ -115,7 +116,7 @@ def main():
                 lobby_window.display_message(f"Joined room with code: {connected_room_code} \nPassword: {connected_room_password}")
             elif message.command == "ROOM_NOT_FOUND":
                 lobby_window.display_message("Room not found.")
-            elif message.command == "LEFT_ROOM":
+            elif message.command == "LEFT_ROOM" or message.command == "KICKED_FROM_ROOM":
                 with lock:
                     connected_room_code = None
                     lobby_window.set_connected_room_code(connected_room_code)
@@ -127,7 +128,15 @@ def main():
                     chat_window.set_in_chat(in_chat)
                 lobby_window.update_menu_states()
                 chat_root.withdraw()  # Hide the chat window
-                lobby_window.display_message("You have left the room.")
+                if message.command == "KICKED_FROM_ROOM":
+                    lobby_window.display_message("You have been kicked from the room.")
+                    messagebox.showinfo("Info", "You have been kicked from the room by the host.")
+                    
+                    with lock:
+                        lobby_window.is_sharing_screen = False
+                        lobby_window.sharing_label.place_forget()
+                else:
+                    lobby_window.display_message("You have left the room.")
             elif message.command == "ROOM_CLOSED":
                 with lock:
                     connected_room_code = None
@@ -142,8 +151,15 @@ def main():
                 lobby_window.display_message("The room has been closed by the host.")
             elif message.command == "USER_LEFT":
                 lobby_window.display_message(f"{message.data['username']} has left the room.")
+            elif message.command == "USER_KICKED":
+                lobby_window.display_message(f"{message.data['username']} has been kicked from the room.")
+                if message.data.get("message"):
+                    lobby_window.display_message(f"Reason: {message.data['message']}")
             elif message.command == "NEW_HOST":
-                lobby_window.display_message(f"{message.data['username']} is the new host.")
+                lobby_window.display_message(f"{message.data['username']} - {message.data["host_id"]} is the new host.")
+                if message.data["host_id"] == member_id:
+                    messagebox.showinfo("New Host", "You are now the host of the room.")
+                lobby_window.host_id = message.data["host_id"]
             elif message.command == "ERROR":
                 messagebox.showinfo("Error", message.data["message"])
                 lobby_window.display_message(f"Error: {message.data['message']}")

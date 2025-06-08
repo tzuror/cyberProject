@@ -127,8 +127,8 @@ def find_member_by_id(member_id: str) -> MEMBER:
 def generate_member_id() -> str:
     member_ids = {client.get_id() for client in clients}
     for i in range(1, len(clients) + 2):
-        if str(i) not in member_ids:
-            return str(i)
+        if i not in member_ids:
+            return i
 def disconnect_client(client_socket, client_address, client:MEMBER):
     room_code = client.get_room_code()
     if client in clients:
@@ -147,7 +147,7 @@ def disconnect_client(client_socket, client_address, client:MEMBER):
             elif rooms[room_code].get_host() is None and len(rooms[room_code].get_members()) > 0:
                 new_host = list(rooms[room_code].get_members())[0]
                 rooms[room_code].set_host(new_host)
-                broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}).to_str().encode('utf-8'))
+                broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host),"host_id": new_host.get_id() }).to_str().encode('utf-8'))
         clients.remove(client)
         del client
     else:
@@ -246,7 +246,7 @@ def process_messages():
                         if len(rooms[room_code].get_members()) > 0:
                             new_host = list(rooms[room_code].get_members())[0]
                             rooms[room_code].set_host(new_host)
-                            broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host)}))
+                            broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host), "host_id": new_host.get_id()}))
                     elif client in rooms[room_code].get_members():
                         client.set_room_code(None)
                         rooms[room_code].remove_member(client)
@@ -262,9 +262,9 @@ def process_messages():
             elif command == "ROOM_STATUS":
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
-                    host_username = {"id": rooms[room_code].get_host().get_name(), "name": rooms[room_code].get_host().get_name(), "email": rooms[room_code].get_host().get_email()} if rooms[room_code].get_host() else None
+                    host_username = {"id": rooms[room_code].get_host().get_id(), "name": rooms[room_code].get_host().get_name(), "email": rooms[room_code].get_host().get_email()} if rooms[room_code].get_host() else None
                     #room_members = list(map(str, rooms[room_code].get_members()))
-                    room_members = [{"id":member.get_id(), "name": member.get_name(), "email": member.get_email()} for member in rooms[room_code].get_members()]
+                    room_members = [{"id": member.get_id(), "name": member.get_name(), "email": member.get_email()} for member in rooms[room_code].get_members()]
                     status = rooms[room_code].get_status()
                     send(client_socket, Protocol("ROOM_STATUS", "server", {
                         "status": status,
@@ -328,7 +328,7 @@ def process_messages():
                     logging.error(f"{message.sender['username']} tried to stop screen sharing in room {room_code} but the room was not found.")
             elif command == "SCREEN_DATA":
                 room_code = client.get_room_code()
-                if room_code in rooms.keys():
+                if room_code in rooms.keys() and room_code != None:
                     if rooms[room_code].get_sharing() == client:
 
                     # Broadcast the screen data to all clients in the room
@@ -363,7 +363,6 @@ def process_messages():
                         send(client_socket, Protocol("ERROR", "server", {"message": "You must be in the chat to send files."}).to_str().encode('utf-8'))
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "You must be in a room to send files."}).to_str().encode('utf-8'))
-
             elif command == "FILE_CHUNK":
                 room_code = client.get_room_code()
                 if room_code in rooms.keys():
@@ -382,6 +381,47 @@ def process_messages():
                         send(client_socket, Protocol("ERROR", "server", {"message": "You must be in the chat to send files."}).to_str().encode('utf-8'))
                 else:
                     send(client_socket, Protocol("ERROR", "server", {"message": "You must be in a room to send files."}).to_str().encode('utf-8'))
+            elif command == "KICK_MEMBER":
+                room_code = client.get_room_code()
+                if room_code in rooms.keys():
+                    if rooms[room_code].get_host() == client:
+                        member_id = message.data["member_id"]
+                        member_to_kick = find_member_by_id(member_id)
+                        if member_to_kick and member_to_kick in rooms[room_code].get_members():
+                            if rooms[room_code].get_sharing() != None and rooms[room_code].get_sharing() == member_to_kick:
+                                rooms[room_code].set_sharing(None)
+                                broadcast_message(room_code, Protocol("USER_STOPPED_SCREEN_SHARE", "server", {"username": member_to_kick.get_name()}))
+                                broadcast_UDP(room_code, Protocol("RESET_FRAME", "server", {"username": member_to_kick.get_name()}))
+                            if member_to_kick in rooms[room_code].get_chat_members():
+                                rooms[room_code].remove_chat_member(member_to_kick)
+                                broadcast_message(room_code, Protocol("CHAT_MESSAGE", "server", {"message": f"{member_to_kick.get_name()} has left the chat."}))
+                            rooms[room_code].remove_member(member_to_kick)
+                            member_to_kick.set_room_code(None)
+                            send(member_to_kick.get_socket(), Protocol("KICKED_FROM_ROOM", "server", {"room_code": room_code}).to_str().encode('utf-8'))
+                            logging.info(f"{member_to_kick.get_name()} was kicked from room {room_code} by {client.get_name()}")
+                            broadcast_message(room_code, Protocol("USER_KICKED", "server", {"username": member_to_kick.get_name()}))
+                        else:
+                            send(client_socket, Protocol("ERROR", "server", {"message": "Member not found or not in the room."}).to_str().encode('utf-8'))
+                    else:
+                        send(client_socket, Protocol("ERROR", "server", {"message": "Only the host can kick members."}).to_str().encode('utf-8'))
+                else:
+                    send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
+            elif command == "MAKE_HOST":
+                room_code = client.get_room_code()
+                if room_code in rooms.keys():
+                    if rooms[room_code].get_host() == client:
+                        member_id = message.data["member_id"]
+                        new_host = find_member_by_id(member_id)
+                        if new_host and new_host in rooms[room_code].get_members():
+                            rooms[room_code].set_host(new_host)
+                            broadcast_message(room_code, Protocol("NEW_HOST", "server", {"username": str(new_host), "host_id": new_host.get_id()}))
+                            logging.info(f"{client.get_name()} made {new_host.get_name()} the new host of room {room_code}")
+                        else:
+                            send(client_socket, Protocol("ERROR", "server", {"message": "Member not found or not in the room."}).to_str().encode('utf-8'))
+                    else:
+                        send(client_socket, Protocol("ERROR", "server", {"message": "Only the host can make a new host."}).to_str().encode('utf-8'))
+                else:
+                    send(client_socket, Protocol("ERROR", "server", {"message": "Room not found."}).to_str().encode('utf-8'))
             else:
                 send(client_socket, Protocol("ERROR", "server", {"message": "Invalid command."}).to_str().encode('utf-8'))
                 logging.error(f"Invalid command: {command}")
@@ -471,6 +511,7 @@ def handle_udp(server_udp_socket):
                         logging.error(f"Client not found.")
                 elif command == "STOP_SHARE":
                     client = find_member_by_udp_address(addr)
+                    room_code = client.get_room_code()
                     if client != None:
                         room_code = client.get_room_code()
                         if room_code in rooms.keys():

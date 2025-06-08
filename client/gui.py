@@ -35,6 +35,7 @@ class LobbyWindow:
         self.root.title("Lobby")
         self.root.geometry("500x400")
         self.shutdown_flag = shutdown_flag
+        self.host_id = None  # Initialize host_id
 
         # Create a Notebook (tabbed interface)
         self.notebook = ttk.Notebook(root)
@@ -144,6 +145,9 @@ class LobbyWindow:
     def refresh_members(self):
         """Refresh the list of members in the room."""
         if not self.connected_room_code:
+            #clear the members frame if not in a room
+            for widget in self.members_frame.winfo_children():
+                widget.destroy()
             return
 
         # Clear the existing member labels and buttons
@@ -194,7 +198,8 @@ class LobbyWindow:
 
     def stop_screen_share(self):
         """Stop screen sharing."""
-        if not self.is_sharing_screen:
+        self.refresh_members()
+        if not self.is_sharing_screen and self.host_id != self.member_id:
             messagebox.showinfo("Info", "Screen sharing is not active.")
             return
 
@@ -227,13 +232,6 @@ class LobbyWindow:
             threading.Event().wait(0.05)  # Wait for 0.5 seconds
         self.client_udp.sendto(Protocol("STOP_SHARE", self.userinfo, {}).to_str().encode('utf-8'), self.server_udp_addr)
     
-
-    def handle_message(self, message, lobby_window, chat_window, chat_root):
-        # ... (existing code)
-
-        # Handle screen data from other users
-        if message.command == "SCREEN_DATA":
-            self.display_screen(message.data["image_data"])
     
     def display_screen(self, image_data):
         """Display the received screen data in the Share Screen tab."""
@@ -292,12 +290,6 @@ class LobbyWindow:
             logging.error(f"Error displaying screen: {e}")
     
     
-    def play_sound(self, sound_data):
-        """Play the received sound data."""
-        # Implement sound playback logic here
-        # This could involve using a library like pyaudio to play the sound
-        print("Playing sound data")
-        pass
 
     def update_members_list(self, host, members):
         """Update the list of members in the Room Members tab."""
@@ -305,6 +297,7 @@ class LobbyWindow:
         print(members)
         for widget in self.members_frame.winfo_children():
             widget.destroy()
+        self.host_id = host["id"]
         host_id = host["id"]
         host_name = host["name"]
         host_email = host["email"]
@@ -323,18 +316,30 @@ class LobbyWindow:
             member_email = member["email"]
             member_label = tk.Label(member_frame, text=f"id: {member_id} - {member_name} - {member_email}", anchor="w")
             member_label.pack(side=tk.LEFT, padx=5)
-
-            if host["id"] == self.member_id and member["id"] != self.member_id:
-                kick_button = tk.Button(member_frame, text="Kick", command=lambda m=member_id: self.kick_member(m))
+            print(f"Host ID: {self.host_id}, Member ID: {self.member_id}, Member: {member}")
+            if self.host_id == self.member_id and member["id"] != self.member_id:
+                kick_button = tk.Button(member_frame, text="Kick", command=lambda n=member_name, m=member_id: self.kick_member(n, m))
                 kick_button.pack(side=tk.RIGHT, padx=5)
-    def kick_member(self, member_id: str):
+
+                make_host_button = tk.Button(member_frame, text="Make Host", command=lambda n=member_name, m=member_id: self.make_host(n, m))
+                make_host_button.pack(side=tk.RIGHT, padx=5)
+    def kick_member(self,member_name: str, member_id: str):
         """Kick a member from the room."""
         if not self.connected_room_code:
             messagebox.showinfo("Info", "You are not in a room.")
             return
+        sure = messagebox.askyesno("Kick Member", f"Are you sure you sure you want to kick {member_id} - {member_name} from the room?")
+        if sure:
+            self.client.send(Protocol("KICK_MEMBER", self.userinfo, {"member_id": member_id}).to_str().encode('utf-8'))
 
-        self.client.send(Protocol("KICK_MEMBER", self.userinfo, {"username": member_id}).to_str().encode('utf-8'))
-
+    def make_host(self, member_name: str, member_id: str):
+        """Make a member the host of the room."""
+        if not self.connected_room_code:
+            messagebox.showinfo("Info", "You are not in a room.")
+            return
+        sure = messagebox.askyesno("Make Host", f"Are you sure you want to make {member_id} - {member_name} the host?\nThis will transfer host privileges to them.\nYou will no longer be the host.\nIt's irreversible!")
+        if sure:
+            self.client.send(Protocol("MAKE_HOST", self.userinfo, {"member_id": member_id}).to_str().encode('utf-8'))
 
     def update_menu_states(self):
         """Update the enabled/disabled state of menu options based on the current state."""
@@ -446,14 +451,15 @@ class ChatWindow:
 
         self.main_frame = tk.Frame(root)
 
+        self.main_frame = tk.Frame(root)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         self.main_frame.grid_rowconfigure(0, weight=1)  # Chat area row
         self.main_frame.grid_rowconfigure(1, weight=0)  # Entry field row
-        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.main_frame.grid_columnconfigure(0, weight=1)  # Chat area column
+        self.main_frame.grid_columnconfigure(1, weight=0)  # Send File button column
         # Chat area
         self.chat_area = scrolledtext.ScrolledText(self.main_frame, state='disabled')
-        #self.chat_area.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-        self.chat_area.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.chat_area.grid(row=0, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
 
         # Message entry field
         self.entry_field = tk.Entry(self.main_frame)
@@ -461,8 +467,50 @@ class ChatWindow:
         #self.entry_field.pack(padx=10, pady=10, fill=tk.X)
         self.entry_field.bind("<Return>", self.send_message)
 
-        self.send_file_button = tk.Button(self.main_frame, text="Send File", command=self.send_file)
-        self.send_file_button.grid(row=1, column=1, padx=10, pady=10, sticky="e")
+        
+
+        original_send_file_icon = Image.open(r"D:\or\cyberProject\client\upload_icon.png")  # Replace with your icon file path
+        resized_send_file_icon = original_send_file_icon.resize((25, 25), Image.Resampling.LANCZOS)
+        self.send_file_icon = ImageTk.PhotoImage(resized_send_file_icon)
+        # Send file button
+        
+        self.send_file_button = tk.Button(
+            self.main_frame,
+            image=self.send_file_icon,
+            command=self.send_file,
+            borderwidth=0,  # Optional: Remove button border
+            highlightthickness=0  # Optional: Remove button highlight
+        )
+        self.send_file_button.grid(row=1, column=1, padx=(5, 10), pady=10, sticky="e")  # Add spacing with padx
+
+        original_send_icon = Image.open(r"D:\or\cyberProject\client\send_icon.png")  # Replace with your icon file path
+        resized_send_icon = original_send_icon.resize((25, 25), Image.Resampling.LANCZOS)
+        self.send_icon = ImageTk.PhotoImage(resized_send_icon)
+        # Send message button
+        self.send_message_button = tk.Button(
+            self.main_frame,
+            image=self.send_icon,
+            command=self.send_message,
+            borderwidth=0,  # Optional: Remove button border
+            highlightthickness=0  # Optional: Remove button highlight
+        )
+        self.send_message_button.grid(row=1, column=2, padx=(5, 10), pady=10, sticky="e")  # Add spacing with padx
+
+        original_download_icon = Image.open(r"D:\or\cyberProject\client\download_icon.png")  # Replace with your icon file path
+        resized_download_icon = original_download_icon.resize((25, 25), Image.Resampling.LANCZOS)  # Resize to 20x20 pixels
+        self.download_icon = ImageTk.PhotoImage(resized_download_icon)
+
+        # Download Chat History button (with icon)
+        self.download_history_button = tk.Button(
+            self.chat_area,
+            image=self.download_icon,
+            command=self.download_chat_history,
+            borderwidth=0,  # Remove button border
+            highlightthickness=0,  # Remove button highlight
+            bg=self.chat_area["bg"],  # Match the button background to the chat area
+            activebackground=self.chat_area["bg"]  # Match the active background to the chat area
+        )
+        self.download_history_button.place(relx=1.0, rely=0.0, anchor="ne", x=-5, y=5)  # Top-right corner inside chat area
 
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -470,7 +518,27 @@ class ChatWindow:
         self.in_chat = in_chat
     def set_connected_room_code(self, room_code):
         self.connected_room_code = room_code
+    def download_chat_history(self):
+        """Save the chat history to a file."""
+        # diffolt name is chat_history.txt
+        file_path = tkinter.filedialog.asksaveasfilename(
+            title="Save Chat History",
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+              initialfile="chat_history.txt"  # Default file name
+        )
+        if not file_path:
+            return  # User canceled the save dialog
 
+        try:
+            # Get the chat history from the chat area
+            chat_history = self.chat_area.get("1.0", tk.END).strip()
+            with open(file_path, "w", encoding="utf-8") as file:
+                file.write(chat_history)
+            messagebox.showinfo("Success", f"Chat history saved to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save chat history: {e}")
+            
     def send_message(self, event=None):
         message = self.entry_field.get()
         if message:
@@ -533,7 +601,7 @@ class ChatWindow:
                         }
                     ).to_str().encode('utf-8'))
                     
-                self.display_message(f"{self.userinfo["username "]}: sent the file '{file_name}'")
+                self.display_message(f"{self.userinfo["username"]}: sent the file '{file_name}'")
                 self.add_file_link_to_chat(file_name, file_path)
                 
         except Exception as e:
